@@ -1,0 +1,14 @@
+{
+  "filter-paths": [
+    "test/",
+    "script/"
+  ],
+  "detectors": {
+    "reentrancy-eth": true,
+    "arbitrary-send-eth": true,
+    "uninitialized-state": true,
+    "calls-loop": true,
+    "incorrect-equality": true,
+    "delegatecall": true
+  }
+}

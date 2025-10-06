@@ -1,0 +1,16 @@
+id,requirement,contract.fn,event,tests
+R1,ERC4626 vault on spokes with LST mirror,SpokeYieldVault.deposit|redeem,LstMinted|LstBurned,test/unit/SpokeYieldVault.t.sol
+R2,Adapter allocation/deallocation with caps and SafeERC20 transfer-first,SpokeYieldVault.allocateToAdapter|deallocateFromAdapter,AdapterAllocated|AdapterDeallocated,test/unit/SpokeYieldVault.t.sol; test/unit/AdapterBehavior.t.sol
+R3,Adapter base guards (nonReentrant, pause, cap, emergencyWithdraw),BaseAdapter.deposit|withdraw|harvest|emergencyWithdraw,AdapterDeposit|AdapterWithdraw|AdapterHarvest|AdapterEmergencyWithdraw,test/unit/AdapterBehavior.t.sol
+R4,AMM cooldown enforced on withdraw,VelodromeLPAdapter._withdraw,COOLDOWN revert,test/unit/VelodromeAdapter.t.sol
+R5,Adapter registry allowlist and per-adapter caps,AdapterRegistry.setAdapter|isAllowed|capOf,AdapterUpdated|RegistryPaused,test/unit/AdapterRegistry.t.sol
+R6,Superchain messaging with allowlists and nonces,SuperchainAdapter.send|authIncoming,MessageSent|BridgeFlagUpdated|SelectorAllowed|SenderAllowed,test/unit/SuperchainAdapter.t.sol; test/unit/SuperchainAdapterFlow.t.sol; test/unit/SuperchainAdapterNegative.t.sol; test/invariant/NoncesInvariant.t.sol
+R7,Hub canonical accounting with nonce replay protection,SuperVaultHub.creditRemoteDeposit|requestRemoteWithdrawal|requestRebalance,RemoteDepositCredited|RemoteWithdrawalRequested|RebalanceRequested,test/unit/SuperVaultHub.t.sol
+R8,Controller with listMarket/params/accrue/borrow/repay/liquidate and policy bounds,ControllerHub.listMarket|setParams|accrue|borrow|repay|liquidate,MarketListed|MarketParamsUpdated|Accrued|Borrow|Repay|Liquidate,test/unit/ControllerHub.t.sol; test/unit/ControllerHubCoverage.t.sol; test/unit/ControllerHubPolicy.t.sol; test/fuzz/ControllerHubFuzz.t.sol
+R9,Oracle router with heartbeat, deviation, sequencer checks,PriceOracleRouter.getPrice|setFeed|setSequencerOracle,FeedSet|SequencerOracleSet,test/unit/PriceOracleRouter.t.sol
+R10,Rewards accrual and claiming,PerChainRewardsDistributor.addRewards|claim,RewardsAdded|Claimed|Checkpoint,test/unit/EmissionsAndRewards.t.sol
+R11,Emissions controller with epoch and per-chain caps,EmissionsController.setEpochCap|setPerChainCap|instructDistribute,EpochCapSet|PerChainCapSet|InstructDistribute,test/unit/EmissionsAndRewards.t.sol
+R12,Vault factory deploys vault + LST and grants MINTER,VaultFactory.create,VaultCreated,test/unit/VaultFactory.t.sol
+R13,Pausing controls and flags across modules,SpokeYieldVault.setFlags; ControllerHub.setPause; AdapterRegistry.pause,FlagsUpdated|PauseSet|RegistryPaused,various unit tests
+R14,Upgradeability via UUPS with governor auth,All UUPS _authorizeUpgrade(),Upgraded (proxy),constructor/init tests across suites
+R15,Caps and pause blast radius documented and enforced,ControllerHub.setBorrowCap|setPause; AdapterRegistry caps, BorrowCapSet|PauseSet|AdapterUpdated,ControllerHubPolicy.t.sol

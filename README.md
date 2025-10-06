@@ -1,66 +1,28 @@
-## Foundry
+# Superchain Vaults
 
-**Foundry is a blazing fast, portable and modular toolkit for Ethereum application development written in Rust.**
+Production-grade Superchain vault system built with Solidity 0.8.24 and Foundry, using OpenZeppelin v5.
 
-Foundry consists of:
+## Architecture
+- SuperchainAdapter: cross-chain messenger wrapper with allowlists and nonces.
+- SuperVaultHub: canonical accounting and coordination.
+- SpokeYieldVault (ERC4626): user deposits/withdrawals, LST mint/burn, adapters.
+- Strategy adapters: AaveV3Adapter, VelodromeLPAdapter via BaseAdapter and AdapterRegistry.
+- Rewards: PerChainRewardsDistributor; EmissionsController.
+- Oracles: PriceOracleRouter.
+- Lending: ControllerHub.
 
-- **Forge**: Ethereum testing framework (like Truffle, Hardhat and DappTools).
-- **Cast**: Swiss army knife for interacting with EVM smart contracts, sending transactions and getting chain data.
-- **Anvil**: Local Ethereum node, akin to Ganache, Hardhat Network.
-- **Chisel**: Fast, utilitarian, and verbose solidity REPL.
-
-## Documentation
-
-https://book.getfoundry.sh/
-
-## Usage
-
-### Build
-
-```shell
-$ forge build
+## Dev
+```bash
+forge build
+forge test -vvvv
+forge coverage --report lcov
 ```
 
-### Test
-
-```shell
-$ forge test
+## Gas
+Run tests with gas report:
+```bash
+forge test --gas-report
 ```
 
-### Format
-
-```shell
-$ forge fmt
-```
-
-### Gas Snapshots
-
-```shell
-$ forge snapshot
-```
-
-### Anvil
-
-```shell
-$ anvil
-```
-
-### Deploy
-
-```shell
-$ forge script script/Counter.s.sol:CounterScript --rpc-url <your_rpc_url> --private-key <your_private_key>
-```
-
-### Cast
-
-```shell
-$ cast <subcommand>
-```
-
-### Help
-
-```shell
-$ forge --help
-$ anvil --help
-$ cast --help
-```
+## Security
+See SECURITY.md. Slither config in `.slither.json`.

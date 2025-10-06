@@ -1,0 +1,95 @@
+{
+	"version": "2.0.0",
+	"tasks": [
+		{
+			"label": "forge build",
+			"type": "shell",
+			"command": "forge build",
+			"problemMatcher": [
+				"$solidityc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "forge build",
+			"type": "shell",
+			"command": "forge build",
+			"problemMatcher": [
+				"$solidityc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "forge build 2",
+			"type": "shell",
+			"command": "forge build",
+			"problemMatcher": [
+				"$solidityc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "forge test",
+			"type": "shell",
+			"command": "forge test -q",
+			"problemMatcher": [
+				"$solidityc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "forge test verbose",
+			"type": "shell",
+			"command": "forge test",
+			"problemMatcher": [
+				"$solidityc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "forge test all",
+			"type": "shell",
+			"command": "forge test",
+			"problemMatcher": [
+				"$solidityc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "forge test again",
+			"type": "shell",
+			"command": "forge test",
+			"problemMatcher": [
+				"$solidityc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "forge test full",
+			"type": "shell",
+			"command": "forge test",
+			"problemMatcher": [
+				"$solidityc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "forge test -vv",
+			"type": "shell",
+			"command": "forge test -vv",
+			"problemMatcher": [
+				"$solidityc"
+			],
+			"group": "build"
+		},
+		{
+			"label": "forge test pass",
+			"type": "shell",
+			"command": "forge test",
+			"problemMatcher": [
+				"$solidityc"
+			],
+			"group": "build"
+		}
+	]
+}

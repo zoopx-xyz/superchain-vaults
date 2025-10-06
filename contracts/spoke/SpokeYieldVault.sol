@@ -61,6 +61,9 @@ contract SpokeYieldVault is
     event BorrowPayout(address indexed to, address indexed asset, uint256 amount, bytes32 actionId);
     event SharesSeized(address indexed user, address indexed to, uint256 shares, bytes32 actionId);
     event FlagsUpdated(bool depositsEnabled, bool borrowsEnabled, bool bridgeEnabled);
+    // Withdraw queue events (for harness/integration testing)
+    event WithdrawQueued(address indexed user, uint256 indexed claimId, uint256 shares, uint256 ts);
+    event WithdrawFulfilled(address indexed user, uint256 indexed claimId, uint256 assets, bytes32 actionId, uint256 ts);
 
     // Errors
     error DepositsDisabled();
@@ -73,6 +76,17 @@ contract SpokeYieldVault is
 
     // Nonce replay protection for inbound messages
     mapping(bytes32 => bool) private _usedNonce;
+
+    // --- Lightweight withdraw queue (testing harness support) ---
+    struct Claim {
+        address user;
+        uint128 shares;
+        uint128 filledAssets;
+        bool active;
+        uint64 ts;
+    }
+    mapping(uint256 => Claim) public claims; // claimId => Claim
+    uint256 public nextClaimId;
 
     function initialize(
         IERC20 asset_,
@@ -187,6 +201,38 @@ contract SpokeYieldVault is
         (bool ok, ) = adapter.call(abi.encodeWithSignature("harvest(bytes)", data));
         require(ok, "ADAPTER_HARVEST_FAIL");
     emit Harvest(adapter, asset(), 0);
+    }
+
+    // --- Withdraw queue (harness) ---
+    /// @notice Enqueue a withdraw request in shares units. Emits WithdrawQueued.
+    function enqueueWithdraw(uint256 shares) external whenNotPaused returns (uint256 claimId) {
+        require(shares > 0, "ZERO_SHARES");
+        claimId = nextClaimId++;
+        claims[claimId] = Claim({
+            user: msg.sender,
+            shares: uint128(shares),
+            filledAssets: 0,
+            active: true,
+            ts: uint64(block.timestamp)
+        });
+        emit WithdrawQueued(msg.sender, claimId, shares, block.timestamp);
+    }
+
+    /// @notice Fulfill a portion of a queued withdraw in asset units. Only HUB may call in tests/harness.
+    function fulfillWithdraw(uint256 claimId, uint256 assets, bytes32 actionId) external onlyRole(HUB_ROLE) whenNotPaused {
+        Claim storage c = claims[claimId];
+        require(c.active, "INACTIVE");
+        // transfer assets to user up to local balance
+        IERC20(asset()).safeTransfer(c.user, assets);
+        unchecked {
+            c.filledAssets += uint128(assets);
+        }
+        // if fully satisfied in assets terms, mark inactive
+        uint256 targetAssets = convertToAssets(c.shares);
+        if (c.filledAssets >= targetAssets) {
+            c.active = false;
+        }
+        emit WithdrawFulfilled(c.user, claimId, assets, actionId, block.timestamp);
     }
 
     // --- Hub handlers ---

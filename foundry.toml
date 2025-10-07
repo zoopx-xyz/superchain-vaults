@@ -1,27 +1,30 @@
 [profile.default]
 src = "contracts"
+[profile.default]
+src = "contracts"
 out = "out"
 libs = [
-	"lib",
-	"lib/openzeppelin-contracts",
-	"lib/openzeppelin-contracts-upgradeable"
+    "lib",
+    "lib/openzeppelin-contracts",
+    "lib/openzeppelin-contracts-upgradeable"
 ]
 solc = "0.8.24"
 optimizer = true
 optimizer_runs = 10000
+via_ir = true
 ffi = false
 gas_reports = [
-	"SpokeYieldVault",
-	"ControllerHub",
-	"SuperVaultHub",
-	"AaveV3Adapter",
-	"VelodromeLPAdapter"
+    "SpokeYieldVault",
+    "ControllerHub",
+    "SuperVaultHub",
+    "AaveV3Adapter",
+    "VelodromeLPAdapter"
 ]
 coverage = true
 
 # Allow tests to write simulation artifacts under ./artifacts
 fs_permissions = [
-	{ access = "read-write", path = "./artifacts" }
+    { access = "read-write", path = "./artifacts" }
 ]
 
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options

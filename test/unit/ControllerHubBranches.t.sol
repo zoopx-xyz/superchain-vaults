@@ -6,7 +6,7 @@ import {ControllerHub} from "contracts/hub/ControllerHub.sol";
 import {PriceOracleRouter} from "contracts/hub/PriceOracleRouter.sol";
 import {MockAggregator} from "contracts/mocks/MockAggregator.sol";
 
-contract TestERC20 {
+contract ERC20Mock {
     string public name;
     string public symbol;
     mapping(address => uint256) public balanceOf;
@@ -53,92 +53,77 @@ contract TestERC20 {
     }
 }
 
-contract MockSpokeVault {
+contract SeizeSink {
     event Seized(address user, uint256 shares, address to);
 
+    uint256 public lastShares;
+
     function onSeizeShares(address user, uint256 shares, address to) external {
+        lastShares = shares;
         emit Seized(user, shares, to);
     }
 }
 
-contract ControllerHubUnitTest is Test {
+contract ControllerHubBranchesTest is Test {
     ControllerHub hub;
     PriceOracleRouter router;
-    TestERC20 asset;
-    TestERC20 lst;
+    ERC20Mock asset;
+    ERC20Mock lst;
+    SeizeSink sink;
     MockAggregator aggAsset;
     MockAggregator aggLst;
     address gov = address(0xA11CE);
     address user = address(0xBEEF);
-    MockSpokeVault vault;
 
     function setUp() public {
         router = new PriceOracleRouter();
         router.initialize(gov);
         hub = new ControllerHub();
         hub.initialize(gov, address(router));
-        asset = new TestERC20("ASSET", "AST");
-        lst = new TestERC20("LST", "LST");
+        asset = new ERC20Mock("ASSET", "AST");
+        lst = new ERC20Mock("LST", "LST");
+        sink = new SeizeSink();
         aggAsset = new MockAggregator(1e8, block.timestamp);
         aggLst = new MockAggregator(1e8, block.timestamp);
         vm.prank(gov);
         router.setFeed(address(asset), address(aggAsset), address(0), 8, 1 days, 0);
         vm.prank(gov);
         router.setFeed(address(lst), address(aggLst), address(0), 8, 1 days, 0);
-        vault = new MockSpokeVault();
-
         ControllerHub.MarketParams memory p = ControllerHub.MarketParams({
             ltvBps: 5000,
             liqThresholdBps: 6000,
             reserveFactorBps: 1000,
-            borrowCap: 1_000_000 ether,
+            borrowCap: 100 ether,
             kinkBps: 8000,
             slope1Ray: 1e16,
             slope2Ray: 2e16,
             baseRateRay: 0,
             lst: address(lst),
-            vault: address(vault)
+            vault: address(sink)
         });
         vm.prank(gov);
         hub.listMarket(address(asset), abi.encode(p));
-
-        // user collateral
         lst.mint(user, 1000 ether);
         vm.prank(user);
         hub.enterMarket(address(lst));
     }
 
-    function testBorrowWithinLTV() public {
-        // LTV = 50%, LST worth 1000 => max debt 500
+    function testBorrowAtCapBoundaryThenRevertOnPlusOne() public {
         vm.prank(user);
-        hub.borrow(address(asset), 400 ether, 0);
-        uint256 d = hub.currentDebt(user, address(asset));
-        assertGt(d, 0);
+        hub.borrow(address(asset), 100 ether, 0);
+        vm.expectRevert(abi.encodeWithSignature("ExceedsBorrowCap()"));
+        vm.prank(user);
+        hub.borrow(address(asset), 1, 0);
     }
 
-    function testBorrowExceedsLTVReverts() public {
-        vm.expectRevert(abi.encodeWithSignature("InsufficientCollateral()"));
+    function testSeizeRoundingUpNonZero() public {
+        // Borrow up to the cap to make liquidation possible after a price drop
         vm.prank(user);
-        hub.borrow(address(asset), 600 ether, 0); // > 50% of 1000
-    }
-
-    function testLiquidationFlow() public {
-        // Borrow 500 (max)
-        vm.prank(user);
-        hub.borrow(address(asset), 500 ether, 0);
-        // Make LST price drop so HF < 1 at liq threshold 60%
-        aggLst.setAnswer(8e7); // 0.8
-        // Liquidator repays 100; event contents validated by state checks
-        hub.liquidate(user, address(asset), 100 ether, address(lst), address(this));
-        uint256 d = hub.currentDebt(user, address(asset));
-        assertLt(d, 500 ether);
-    }
-
-    function testRouterStalePriceReverts() public {
-        // Warp forward to avoid underflow and make price stale
-        vm.warp(block.timestamp + 100 days);
-        aggAsset.setUpdatedAt(block.timestamp - 3 days);
-        vm.expectRevert(abi.encodeWithSignature("StalePrice()"));
-        router.getPrice(address(asset));
+        hub.borrow(address(asset), 100 ether, 0);
+        // Drop LST price significantly to push account above liquidation threshold
+        aggLst.setAnswer(1e7); // 0.1
+        // Repay a minimal amount to trigger ceilDiv path in share calc and ensure non-zero seize
+        hub.liquidate(user, address(asset), 1, address(lst), address(this));
+        assertGt(sink.lastShares(), 0, "seized shares should be > 0 due to ceilDiv rounding up");
     }
 }

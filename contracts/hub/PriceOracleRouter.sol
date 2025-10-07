@@ -25,31 +25,63 @@ contract PriceOracleRouter is Initializable, UUPSUpgradeable, AccessControlUpgra
         uint8 decimals; // feed decimals (usually 8)
         uint256 heartbeat; // max age in seconds
         uint256 maxDeviationBps; // acceptable deviation between primary/secondary
+        int256 minAnswer; // minimum allowed answer (signed to match CL interface)
+        int256 maxAnswer; // maximum allowed answer
     }
 
     mapping(address => Feed) public feedOf;
     address public sequencerOracle; // optional sequencer uptime feed
 
-    event FeedSet(address indexed asset, address indexed primary, address secondary, uint256 heartbeatSec, uint256 maxDeviationBps);
+    event FeedSet(
+        address indexed asset, address indexed primary, address secondary, uint256 heartbeatSec, uint256 maxDeviationBps
+    );
     event SequencerOracleSet(address indexed oracle);
+    event GovernorProposed(address indexed currentGovernor, address indexed pendingGovernor);
+    event GovernorAccepted(address indexed previousGovernor, address indexed newGovernor);
 
     error StalePrice();
     error ZeroAddress();
+    error OutOfBounds();
 
-    function initialize(address governor) external initializer {
+    address public governor;
+
+    function initialize(address initialGovernor) external initializer {
         __UUPSUpgradeable_init();
         __AccessControl_init();
         __Pausable_init();
-        _grantRole(DEFAULT_ADMIN_ROLE, governor);
-        _grantRole(GOVERNOR_ROLE, governor);
+        _grantRole(DEFAULT_ADMIN_ROLE, initialGovernor);
+        _grantRole(GOVERNOR_ROLE, initialGovernor);
+        governor = initialGovernor;
     }
 
     function _authorizeUpgrade(address) internal override onlyRole(GOVERNOR_ROLE) {}
 
-    function setFeed(address asset, address primary, address secondary, uint8 decimals, uint256 heartbeat, uint256 maxDeviationBps) external onlyRole(GOVERNOR_ROLE) {
+    function setFeed(
+        address asset,
+        address primary,
+        address secondary,
+        uint8 decimals,
+        uint256 heartbeat,
+        uint256 maxDeviationBps
+    ) external onlyRole(GOVERNOR_ROLE) {
         if (asset == address(0) || primary == address(0)) revert ZeroAddress();
-        feedOf[asset] = Feed({primary: primary, secondary: secondary, decimals: decimals, heartbeat: heartbeat, maxDeviationBps: maxDeviationBps});
+        feedOf[asset] = Feed({
+            primary: primary,
+            secondary: secondary,
+            decimals: decimals,
+            heartbeat: heartbeat,
+            maxDeviationBps: maxDeviationBps,
+            minAnswer: 0,
+            maxAnswer: type(int256).max
+        });
         emit FeedSet(asset, primary, secondary, heartbeat, maxDeviationBps);
+    }
+
+    function setFeedBounds(address asset, int256 minAnswer, int256 maxAnswer) external onlyRole(GOVERNOR_ROLE) {
+        Feed storage f = feedOf[asset];
+        if (f.primary == address(0)) revert ZeroAddress();
+        f.minAnswer = minAnswer;
+        f.maxAnswer = maxAnswer;
     }
 
     function setSequencerOracle(address oracle_) external onlyRole(GOVERNOR_ROLE) {
@@ -70,18 +102,51 @@ contract PriceOracleRouter is Initializable, UUPSUpgradeable, AccessControlUpgra
         }
         Feed memory f = feedOf[asset];
         (, int256 a1,, uint256 u1,) = IAggregatorV3Like(f.primary).latestRoundData();
-        if (a1 <= 0) revert StalePrice();
-        if (f.heartbeat != 0 && block.timestamp - u1 > f.heartbeat) revert StalePrice();
-        if (f.secondary != address(0) && f.maxDeviationBps > 0) {
+        bool pFresh = a1 > 0 && (f.heartbeat == 0 || block.timestamp - u1 <= f.heartbeat);
+        bool pBounds = a1 >= f.minAnswer && a1 <= f.maxAnswer;
+        uint256 p1u;
+        if (pFresh && pBounds) {
+            p1u = uint256(a1);
+        }
+        if (f.secondary != address(0)) {
             (, int256 a2,, uint256 u2,) = IAggregatorV3Like(f.secondary).latestRoundData();
-            if (a2 > 0 && f.heartbeat != 0 && block.timestamp - u2 <= f.heartbeat) {
-                uint256 p1 = uint256(a1);
-                uint256 p2 = uint256(a2);
-                uint256 dev = p1 > p2 ? ((p1 - p2) * 10_000) / p2 : ((p2 - p1) * 10_000) / p1;
-                if (dev > f.maxDeviationBps) revert StalePrice();
+            bool sFresh = a2 > 0 && (f.heartbeat == 0 || block.timestamp - u2 <= f.heartbeat);
+            bool sBounds = a2 >= f.minAnswer && a2 <= f.maxAnswer;
+            if (sFresh && sBounds) {
+                if (p1u != 0) {
+                    // both fresh and in-bounds: enforce deviation both directions
+                    uint256 p2u = uint256(a2);
+                    uint256 dev = p1u > p2u ? ((p1u - p2u) * 10_000) / p2u : ((p2u - p1u) * 10_000) / p1u;
+                    if (dev > f.maxDeviationBps) revert StalePrice();
+                } else {
+                    // primary unusable; use secondary
+                    return (uint256(a2), f.decimals, u2);
+                }
             }
         }
-        return (uint256(a1), f.decimals, u1);
+        if (p1u == 0) revert StalePrice();
+        return (p1u, f.decimals, u1);
+    }
+
+    // --- Two-step governor ---
+    address public pendingGovernor;
+
+    function proposeGovernor(address newGov) external onlyRole(GOVERNOR_ROLE) {
+        if (newGov == address(0)) revert ZeroAddress();
+        pendingGovernor = newGov;
+        emit GovernorProposed(governor, newGov);
+    }
+
+    function acceptGovernor() external {
+        require(msg.sender == pendingGovernor, "NOT_PENDING");
+        address prev = governor;
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(GOVERNOR_ROLE, msg.sender);
+        _revokeRole(GOVERNOR_ROLE, prev);
+        _revokeRole(DEFAULT_ADMIN_ROLE, prev);
+        governor = msg.sender;
+        pendingGovernor = address(0);
+        emit GovernorAccepted(prev, msg.sender);
     }
 
     uint256[50] private __gap;

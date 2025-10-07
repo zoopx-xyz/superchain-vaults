@@ -5,16 +5,18 @@ import {BaseAdapter} from "./BaseAdapter.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
-/// @title VelodromeLPAdapter
-/// @notice Minimal adapter for Velodrome LP; currently treats idle balance as managed assets and records cooldown.
+/// @title VelodromeLPAdapter (MockOnly)
+/// @notice MockOnly — NOT for production deployments.
+/// Treats idle balance as managed assets with a simple cooldown. This is NOT a real Velodrome integration and must remain disabled in prod.
 contract VelodromeLPAdapter is BaseAdapter {
     using SafeERC20 for IERC20;
+
     uint64 public lastAddTimestamp;
     uint64 public cooldown; // seconds between deposits and withdrawals to reduce MEV games
 
     function initialize(address _vault, address _underlying, address governor) external initializer {
         if (_vault == address(0) || _underlying == address(0) || governor == address(0)) revert("ZERO_ADDR");
-        __BaseAdapter_init(_vault, _underlying, governor);
+        baseAdapterInit(_vault, _underlying, governor);
     }
 
     function totalAssets() external view override returns (uint256) {
@@ -39,7 +41,7 @@ contract VelodromeLPAdapter is BaseAdapter {
         if (withdrawn < minOut) revert SlippageExceeded(withdrawn, minOut);
     }
 
-    function _harvest(bytes calldata /*data*/ ) internal override returns (uint256 harvested) {
+    function _harvest(bytes calldata /*data*/ ) internal pure override returns (uint256 harvested) {
         return 0;
     }
 

@@ -24,15 +24,44 @@ contract SuperVaultHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
     uint256 public totalAssetsCanonical;
     address public baseAsset;
     address public adapter; // SuperchainAdapter
+    // Bridge accounting (accounting-only, not token balances)
+    uint256 public pendingInbound;
+    uint256 public pendingOutbound;
+    uint256 public bridgeFeesAccrued;
 
     // --- Events ---
     event SpokeRegistered(uint256 indexed chainId, address indexed spoke);
-    event RemoteDepositCredited(uint256 indexed srcChainId, address indexed spoke, address indexed user, address asset, uint256 assets, uint256 shares, uint256 nonce, bytes32 actionId);
-    event RemoteWithdrawalRequested(uint256 indexed dstChainId, address indexed spoke, address indexed user, address asset, uint256 assets, bytes32 actionId);
-    event RebalanceRequested(uint256 indexed fromChainId, uint256 indexed toChainId, address asset, uint256 assets, bytes data, bytes32 actionId);
+    event RemoteDepositCredited(
+        uint256 indexed srcChainId,
+        address indexed spoke,
+        address indexed user,
+        address asset,
+        uint256 assets,
+        uint256 shares,
+        uint256 nonce,
+        bytes32 actionId
+    );
+    event RemoteWithdrawalRequested(
+        uint256 indexed dstChainId,
+        address indexed spoke,
+        address indexed user,
+        address asset,
+        uint256 assets,
+        bytes32 actionId
+    );
+    event RebalanceRequested(
+        uint256 indexed fromChainId,
+        uint256 indexed toChainId,
+        address asset,
+        uint256 assets,
+        bytes data,
+        bytes32 actionId
+    );
     event ControllerCalled(bytes data);
     event BridgePaused(bool paused);
     event BaseAssetSet(address indexed asset);
+    event GovernorProposed(address indexed currentGovernor, address indexed pendingGovernor);
+    event GovernorAccepted(address indexed previousGovernor, address indexed newGovernor);
 
     // --- Errors ---
     error BridgeDisabled();
@@ -40,16 +69,26 @@ contract SuperVaultHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
     error NonceUsed();
     error ZeroAddress();
 
+    // --- Governor tracking ---
+    address public governor;
+    address public pendingGovernor;
+
     /// @notice Initializer
-    function initialize(address _baseAsset, address _adapter, address governor, address relayer) external initializer {
+    function initialize(address _baseAsset, address _adapter, address initialGovernor, address relayer)
+        external
+        initializer
+    {
         __UUPSUpgradeable_init();
         __AccessControl_init();
         __Pausable_init();
-        if (_baseAsset == address(0) || _adapter == address(0) || governor == address(0) || relayer == address(0)) revert ZeroAddress();
+        if (
+            _baseAsset == address(0) || _adapter == address(0) || initialGovernor == address(0) || relayer == address(0)
+        ) revert ZeroAddress();
         baseAsset = _baseAsset;
         adapter = _adapter;
-        _grantRole(DEFAULT_ADMIN_ROLE, governor);
-        _grantRole(GOVERNOR_ROLE, governor);
+        _grantRole(DEFAULT_ADMIN_ROLE, initialGovernor);
+        _grantRole(GOVERNOR_ROLE, initialGovernor);
+        governor = initialGovernor;
         _grantRole(RELAYER_ROLE, relayer);
         bridgeEnabled = true;
         emit BaseAssetSet(_baseAsset);
@@ -57,6 +96,25 @@ contract SuperVaultHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
 
     /// @inheritdoc UUPSUpgradeable
     function _authorizeUpgrade(address) internal override onlyRole(GOVERNOR_ROLE) {}
+
+    // --- Two-step governor ---
+    function proposeGovernor(address newGov) external onlyRole(GOVERNOR_ROLE) {
+        if (newGov == address(0)) revert ZeroAddress();
+        pendingGovernor = newGov;
+        emit GovernorProposed(governor, newGov);
+    }
+
+    function acceptGovernor() external {
+        require(msg.sender == pendingGovernor, "NOT_PENDING");
+        address prev = governor;
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(GOVERNOR_ROLE, msg.sender);
+        _revokeRole(GOVERNOR_ROLE, prev);
+        _revokeRole(DEFAULT_ADMIN_ROLE, prev);
+        governor = msg.sender;
+        pendingGovernor = address(0);
+        emit GovernorAccepted(prev, msg.sender);
+    }
 
     /// @notice Enable/disable bridge operations.
     function setBridgeEnabled(bool enabled) external onlyRole(GOVERNOR_ROLE) {
@@ -84,30 +142,87 @@ contract SuperVaultHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
         if (spokeOf[srcChainId] != srcSpoke) revert InvalidSpoke();
         if (usedNonce[nonce]) revert NonceUsed();
         usedNonce[nonce] = true;
-    // Update canonical accounting (example implementation)
+        // Canonical accounting:
+        // totalAssetsCanonical = Σ(spokeReportedAssets) + pendingInbound - pendingOutbound - bridgeFeesAccrued
+        // Here we treat credited remote deposit as decreasing pendingInbound and increasing canonical total by assets.
+        if (pendingInbound >= assets) pendingInbound -= assets;
+        else pendingInbound = 0;
         unchecked {
             totalAssetsCanonical += assets;
         }
-    bytes32 actionId = keccak256(abi.encode("RemoteDeposit", uint256(1), srcChainId, srcSpoke, block.chainid, address(this), user, baseAsset, assets, uint256(nonce)));
-    emit RemoteDepositCredited(srcChainId, srcSpoke, user, baseAsset, assets, shares, uint256(nonce), actionId);
+        bytes32 actionId = keccak256(
+            abi.encode(
+                "RemoteDeposit",
+                uint256(1),
+                srcChainId,
+                srcSpoke,
+                block.chainid,
+                address(this),
+                user,
+                baseAsset,
+                assets,
+                uint256(nonce)
+            )
+        );
+        emit RemoteDepositCredited(srcChainId, srcSpoke, user, baseAsset, assets, shares, uint256(nonce), actionId);
     }
 
     /// @notice Requests a remote withdrawal on destination chain.
-    function requestRemoteWithdrawal(uint256 dstChainId, address user, uint256 assets) external onlyRole(RELAYER_ROLE) whenNotPaused {
+    function requestRemoteWithdrawal(uint256 dstChainId, address user, uint256 assets)
+        external
+        onlyRole(RELAYER_ROLE)
+        whenNotPaused
+    {
         if (!bridgeEnabled) revert BridgeDisabled();
-        bytes32 actionId = keccak256(abi.encode("RemoteWithdrawal", uint256(1), block.chainid, address(this), dstChainId, spokeOf[dstChainId], user, baseAsset, assets, uint256(block.number)));
+        // Account outbound pending and reduce canonical total; bridge fees simulated via external setter in tests if needed
+        pendingOutbound += assets;
+        if (totalAssetsCanonical >= assets) totalAssetsCanonical -= assets;
+        else totalAssetsCanonical = 0;
+        bytes32 actionId = keccak256(
+            abi.encode(
+                "RemoteWithdrawal",
+                uint256(1),
+                block.chainid,
+                address(this),
+                dstChainId,
+                spokeOf[dstChainId],
+                user,
+                baseAsset,
+                assets,
+                uint256(block.number)
+            )
+        );
         emit RemoteWithdrawalRequested(dstChainId, spokeOf[dstChainId], user, baseAsset, assets, actionId);
     }
 
     /// @notice Requests a rebalance between chains.
-    function requestRebalance(uint256 fromChain, uint256 toChain, uint256 assets, bytes calldata data) external onlyRole(GOVERNOR_ROLE) whenNotPaused {
-        bytes32 actionId = keccak256(abi.encode("Rebalance", uint256(1), fromChain, spokeOf[fromChain], toChain, spokeOf[toChain], address(this), baseAsset, assets, uint256(block.number)));
+    function requestRebalance(uint256 fromChain, uint256 toChain, uint256 assets, bytes calldata data)
+        external
+        onlyRole(GOVERNOR_ROLE)
+        whenNotPaused
+    {
+        bytes32 actionId = keccak256(
+            abi.encode(
+                "Rebalance",
+                uint256(1),
+                fromChain,
+                spokeOf[fromChain],
+                toChain,
+                spokeOf[toChain],
+                address(this),
+                baseAsset,
+                assets,
+                uint256(block.number)
+            )
+        );
         emit RebalanceRequested(fromChain, toChain, baseAsset, assets, data, actionId);
     }
 
-    /// @notice Reserved controller hook; currently no-op.
-    function controllerCall(bytes calldata data) external onlyRole(CONTROLLER_ROLE) {
-        emit ControllerCalled(data);
+    /// @notice Controller call policy: not implemented in production; any future call must use typed interfaces.
+    error NotImplemented();
+
+    function controllerCall(bytes calldata) external pure {
+        revert NotImplemented();
     }
 
     // --- View checkers for invariants ---
@@ -119,6 +234,11 @@ contract SuperVaultHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
     /// @notice Returns the registered spoke for a chain.
     function getSpoke(uint256 chainId) external view returns (address) {
         return spokeOf[chainId];
+    }
+
+    /// @notice Returns a canonical accounting snapshot.
+    function canonicalSnapshot() external view returns (uint256 tvl, uint256 inb, uint256 outb, uint256 fees) {
+        return (totalAssetsCanonical, pendingInbound, pendingOutbound, bridgeFeesAccrued);
     }
 
     uint256[50] private __gap;

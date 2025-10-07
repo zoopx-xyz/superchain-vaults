@@ -9,15 +9,13 @@ import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 /// @notice Non-upgradeable ERC20 with AccessControl mint/burn via MINTER_ROLE.
 contract SuperchainERC20 is ERC20, ERC20Permit, AccessControl {
     bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
+
     event MinterSet(address indexed vault, bool enabled);
 
     /// @notice Constructs the token.
     /// @param name_ Token name.
     /// @param symbol_ Token symbol.
-    constructor(string memory name_, string memory symbol_)
-        ERC20(name_, symbol_)
-        ERC20Permit(name_)
-    {
+    constructor(string memory name_, string memory symbol_) ERC20(name_, symbol_) ERC20Permit(name_) {
         _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
     }
 

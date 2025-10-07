@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {SuperchainAdapter} from "../../contracts/messaging/SuperchainAdapter.sol";
 
 contract SuperchainAdapterTest is Test {
@@ -16,10 +16,10 @@ contract SuperchainAdapterTest is Test {
         adapter.setAllowedSelector(bytes4(keccak256("foo()")), true);
         vm.prank(gov);
         adapter.setAllowedSender(block.chainid, address(this), true);
-    // grant relayer for acceptIncoming tests
-    bytes32 rel = adapter.RELAYER_ROLE();
-    vm.prank(gov);
-    adapter.grantRole(rel, address(this));
+        // grant relayer for acceptIncoming tests
+        bytes32 rel = adapter.RELAYER_ROLE();
+        vm.prank(gov);
+        adapter.grantRole(rel, address(this));
     }
 
     function testAuthIncoming() public view {

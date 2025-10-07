@@ -2,7 +2,6 @@
 pragma solidity ^0.8.24;
 
 import {CrossChainFixture} from "../setup/CrossChainFixture.t.sol";
-import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20Decimals} from "../../contracts/mocks/MockERC20Decimals.sol";
 
 contract CrossChainLendingWithdraw is CrossChainFixture {
@@ -10,9 +9,21 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
     uint256 internal constant BLOCK_TIME_SEC = 2;
 
     // KPI events (test-harness emitted for measurement only)
-    event BorrowRequested(address indexed user, address indexed asset, uint256 amount, uint256 dstChainId, bytes32 actionId, uint256 ts);
-    event BorrowDecision(address indexed user, address indexed asset, uint256 amount, uint256 routesUsed, bytes32 actionId, uint256 ts);
-    event LiquidityRouted(uint256 indexed fromChain, uint256 indexed toChain, address indexed asset, uint256 amount, bytes32 routeType, bytes32 actionId, uint256 ts);
+    event BorrowRequested(
+        address indexed user, address indexed asset, uint256 amount, uint256 dstChainId, bytes32 actionId, uint256 ts
+    );
+    event BorrowDecision(
+        address indexed user, address indexed asset, uint256 amount, uint256 routesUsed, bytes32 actionId, uint256 ts
+    );
+    event LiquidityRouted(
+        uint256 indexed fromChain,
+        uint256 indexed toChain,
+        address indexed asset,
+        uint256 amount,
+        bytes32 routeType,
+        bytes32 actionId,
+        uint256 ts
+    );
     event BorrowPaused(address indexed asset, uint256 ts);
     event IRMRateUpdated(address indexed asset, uint256 newBorrowRate, uint256 utilization, uint256 ts);
 
@@ -37,6 +48,7 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
         // Fund the bridge to simulate outbound liquidity from B
         MockERC20Decimals(address(asset)).mint(address(bridge), amount);
         uint256 t0 = block.timestamp;
+        uint256 b0 = vm.getBlockNumber();
         // Emulate hub routing and bridge delivery: enqueue transfer from B to A
         // Use MockBridge to simulate token movement
         bridge.setToken(address(asset), true);
@@ -49,8 +61,9 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
         // Payout after arrival
         vm.prank(address(controller));
         spokeA.payOutBorrow(address(this), address(asset), amount);
-        uint256 dt = block.timestamp - t0;
-        assertEq(dt, 12 * BLOCK_TIME_SEC, "latency seconds");
+        // Assert on block latency to avoid timestamp quirks
+        uint256 db = vm.getBlockNumber() - b0;
+        assertEq(db, 12, "latency blocks");
     }
 
     // Scenario S3 — Borrow when destination lacks liquidity; multi-route
@@ -82,6 +95,7 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
 
         // Deliver B after 8 blocks, C after 15; final payout should occur after max latency (15 blocks)
         uint256 t0 = block.timestamp;
+        uint256 b0 = vm.getBlockNumber();
         // simulate earliest arrival (B)
         vm.roll(block.number + 8);
         vm.warp(t0 + 8 * BLOCK_TIME_SEC);
@@ -95,7 +109,7 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
         spokeA.payOutBorrow(address(this), address(asset), amount);
         // Assertions: route sum and latency
         assertEq(routeA + routeB + routeC, amount, "sum routes == amount");
-        assertEq(block.timestamp - t0, 15 * BLOCK_TIME_SEC, "max route latency");
+        assertEq(vm.getBlockNumber() - b0, 15, "max route latency (blocks)");
     }
 
     // Scenario S7 — Oracle stale / Sequencer down (degrade to queue-only)
@@ -120,9 +134,10 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
     function test_S4_ConcurrentBorrowAndWhaleWithdraw_PriorityAndCaps() public {
         // Config
         uint16 withdrawalBufferBps = 300; // 3%
-        vm.prank(governor); spokeA.setWithdrawalBufferBps(withdrawalBufferBps);
+        vm.prank(governor);
+        spokeA.setWithdrawalBufferBps(withdrawalBufferBps);
         uint16 epochOutflowCapBps = 1000; // 10%
-        uint16 dayOutflowCapBps = 3000; // 30%
+        // uint16 dayOutflowCapBps = 3000; // 30%
         uint256 tvl = 5_000_000e6; // from fixture
         uint256 bufferCap = (tvl * withdrawalBufferBps) / 10_000; // 150,000
         // Latency config
@@ -146,8 +161,8 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
 
         // Whale initiates redeem, simulate instant buffer fill and queued remainder
         // Serve buffer instantly: fulfill up to bufferCap
-    uint256 shares = 8_000e18; // abstract shares for 8% TVL
-    uint256 claimId = spokeA.enqueueWithdraw(shares);
+        uint256 shares = 8_000e18; // abstract shares for 8% TVL
+        uint256 claimId = spokeA.enqueueWithdraw(shares);
         uint256 fastPortion = bufferCap;
         vm.prank(address(hub));
         spokeA.fulfillWithdraw(claimId, fastPortion, bytes32("aid-fast"));
@@ -157,12 +172,13 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
 
         // Apply epoch/day caps when fulfilling after bridge arrival
         uint256 epochCapAssets = (tvl * epochOutflowCapBps) / 10_000; // 500,000
-        uint256 dayCapAssets = (tvl * dayOutflowCapBps) / 10_000; // 1,500,000
+        // uint256 dayCapAssets = (tvl * dayOutflowCapBps) / 10_000; // 1,500,000
         // Track epoch outflows so far: fastPortion
         uint256 epochUsed = fastPortion;
 
         // Advance 10 blocks for both routes to arrive
         uint256 t0 = block.timestamp;
+        uint256 b0 = vm.getBlockNumber();
         vm.roll(block.number + 10);
         vm.warp(t0 + 10 * BLOCK_TIME_SEC);
         bridge.deliverAll();
@@ -170,7 +186,7 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
         // Complete borrow payout after arrival
         vm.prank(address(controller));
         spokeA.payOutBorrow(address(this), address(asset), borrowAmt);
-        uint256 borrowLatency = block.timestamp - t0;
+        uint256 borrowLatencyBlocks = vm.getBlockNumber() - b0;
         // Now fulfill withdrawal from queue limited by epoch cap
         uint256 remainingEpoch = epochCapAssets > epochUsed ? epochCapAssets - epochUsed : 0;
         uint256 fulfillNow = queuedAssets > remainingEpoch ? remainingEpoch : queuedAssets;
@@ -179,7 +195,7 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
 
         // KPIs and assertions
         // Borrow latency should be within policy window (exactly 10 blocks)
-        assertEq(borrowLatency, 10 * BLOCK_TIME_SEC, "S4: borrow latency");
+        assertEq(borrowLatencyBlocks, 10, "S4: borrow latency (blocks)");
         // Withdrawal not starved relative to borrow in same epoch
         // Fill ratios: borrowFill = 100%; withdrawFill >= borrowFill in epoch terms up to cap
         uint256 withdrawFilled = fastPortion + fulfillNow;
@@ -189,7 +205,7 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
         // Epoch outflow cap enforced
         assertLe(epochUsed + fulfillNow, epochCapAssets, "S4: epoch cap");
         // Queue ordering preserved: only one claim; simulate with second claim newer and ensure we fill older first
-    uint256 claimId2 = spokeA.enqueueWithdraw(1_000e18);
+        // uint256 claimId2 = spokeA.enqueueWithdraw(1_000e18);
         // Any additional capacity should go to claimId before claimId2; we ensure we call fulfill on claimId first (already done)
         // IRM reaction: emit a rate update KPI based on a synthetic utilization spike
         // Simulate utilization spike and pause
@@ -204,12 +220,14 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
         uint256 tvl = 5_000_000e6;
         uint256 withdrawAmt = (tvl * 1500) / 10_000; // 15%
         // Zero local buffer effect by setting buffer very low
-        vm.prank(governor); spokeA.setWithdrawalBufferBps(0);
+        vm.prank(governor);
+        spokeA.setWithdrawalBufferBps(0);
         // Entire request queued
-    uint256 claimId = spokeA.enqueueWithdraw(15_000e18);
+        uint256 claimId = spokeA.enqueueWithdraw(15_000e18);
 
         // τ_unwind = 12 blocks, τ_bridge = 8 blocks
-        uint256 tauUnwind = 12; uint256 tauBridge = 8;
+        uint256 tauUnwind = 12;
+        uint256 tauBridge = 8;
         messenger.setDelay(B_CHAIN, A_CHAIN, tauBridge);
         messenger.setDelay(C_CHAIN, A_CHAIN, tauBridge);
         bridge.setToken(address(asset), true);
@@ -224,8 +242,12 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
         MockERC20Decimals(address(asset)).mint(address(bridge), withdrawAmt);
         bridge.setDelay(address(asset), tauBridge);
         bridge.send(address(asset), address(spokeA), withdrawAmt, false);
-        emit LiquidityRouted(B_CHAIN, A_CHAIN, address(asset), withdrawAmt/2, bytes32("UNWIND+BRIDGE"), aid, block.timestamp);
-        emit LiquidityRouted(C_CHAIN, A_CHAIN, address(asset), withdrawAmt/2, bytes32("UNWIND+BRIDGE"), aid, block.timestamp);
+        emit LiquidityRouted(
+            B_CHAIN, A_CHAIN, address(asset), withdrawAmt / 2, bytes32("UNWIND+BRIDGE"), aid, block.timestamp
+        );
+        emit LiquidityRouted(
+            C_CHAIN, A_CHAIN, address(asset), withdrawAmt / 2, bytes32("UNWIND+BRIDGE"), aid, block.timestamp
+        );
         // Deliver after bridge delay
         vm.roll(block.number + tauBridge);
         vm.warp(t0 + (tauUnwind + tauBridge) * BLOCK_TIME_SEC);
@@ -246,11 +268,11 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
     // Scenario S6 — Adversarial out-of-order & duplicate deliveries
     function test_S6_Adversarial_OutOfOrderAndDuplicates() public {
         // Test onRemoteCredit idempotency via nonce guard using HUB role
-    uint256 nonce = 1;
-    bytes32 actionId = keccak256(abi.encode("RC", nonce));
-    // Prepare funds and allowance for ERC4626 _deposit pull-from-user during onRemoteCredit
-    MockERC20Decimals(address(asset)).mint(address(this), 100e6);
-    MockERC20Decimals(address(asset)).approve(address(spokeA), type(uint256).max);
+        uint256 nonce = 1;
+        bytes32 actionId = keccak256(abi.encode("RC", nonce));
+        // Prepare funds and allowance for ERC4626 _deposit pull-from-user during onRemoteCredit
+        MockERC20Decimals(address(asset)).mint(address(this), 100e6);
+        MockERC20Decimals(address(asset)).approve(address(spokeA), type(uint256).max);
         vm.startPrank(address(hub));
         spokeA.onRemoteCredit(address(this), 100e6, 100e18, nonce, actionId);
         // Capture shares after the first successful credit
@@ -262,29 +284,29 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
         assertEq(spokeA.balanceOf(address(this)), sharesAfterFirst, "S6: shares unchanged after duplicate credit");
 
         // Now test withdraw fulfill duplicates: fulfilling same claim multiple times should not overfill beyond assets tracked
-    uint256 claimId = spokeA.enqueueWithdraw(1_000e18);
-    // Fund vault to fulfill once
+        uint256 claimId = spokeA.enqueueWithdraw(1_000e18);
+        // Fund vault to fulfill once
         MockERC20Decimals(address(asset)).mint(address(spokeA), 1_000e6);
         vm.prank(address(hub));
-    spokeA.fulfillWithdraw(claimId, 1_000e6, bytes32("aid-1"));
-    // Duplicate fulfill of small amount should not exceed claim target assets
-    vm.prank(address(hub));
-    spokeA.fulfillWithdraw(claimId, 1, bytes32("aid-dup"));
-    uint256 targetAssets = spokeA.convertToAssets(1_000e18);
-    uint256 totalPaid = 1_000e6 + 1;
-    assertLe(totalPaid, targetAssets, "S6: duplicate fulfill does not exceed target");
+        spokeA.fulfillWithdraw(claimId, 1_000e6, bytes32("aid-1"));
+        // Duplicate fulfill of small amount should not exceed claim target assets
+        vm.prank(address(hub));
+        spokeA.fulfillWithdraw(claimId, 1, bytes32("aid-dup"));
+        uint256 targetAssets = spokeA.convertToAssets(1_000e18);
+        uint256 totalPaid = 1_000e6 + 1;
+        assertLe(totalPaid, targetAssets, "S6: duplicate fulfill does not exceed target");
 
         // Test adapter/adapter acceptIncoming replay guard
         // Duplicate acceptance should revert Replay
-    bytes4 selector = bytes4(keccak256("acceptIncoming(uint256,address,bytes4,uint256,bytes32)"));
-    // Grant relayer role and configure adapter permissions
-    vm.startPrank(governor);
-    adapter.setAllowedSelector(selector, true);
-    adapter.setAllowedSender(A_CHAIN, address(this), true);
-    bytes32 RELAYER_ROLE = adapter.RELAYER_ROLE();
-    adapter.grantRole(RELAYER_ROLE, relayer);
-    vm.stopPrank();
-    vm.startPrank(relayer);
+        bytes4 selector = bytes4(keccak256("acceptIncoming(uint256,address,bytes4,uint256,bytes32)"));
+        // Grant relayer role and configure adapter permissions
+        vm.startPrank(governor);
+        adapter.setAllowedSelector(selector, true);
+        adapter.setAllowedSender(A_CHAIN, address(this), true);
+        bytes32 relayerRole = adapter.RELAYER_ROLE();
+        adapter.grantRole(relayerRole, relayer);
+        vm.stopPrank();
+        vm.startPrank(relayer);
         bytes32 aid = keccak256("aid-acc");
         adapter.acceptIncoming(A_CHAIN, address(this), selector, 123, aid);
         vm.expectRevert();
@@ -292,6 +314,6 @@ contract CrossChainLendingWithdraw is CrossChainFixture {
         vm.stopPrank();
 
         // Idempotency checks: user's shares remain equal to the first credit only
-    assertEq(spokeA.balanceOf(address(this)), sharesAfterFirst, "S6: vault shares unchanged");
+        assertEq(spokeA.balanceOf(address(this)), sharesAfterFirst, "S6: vault shares unchanged");
     }
 }

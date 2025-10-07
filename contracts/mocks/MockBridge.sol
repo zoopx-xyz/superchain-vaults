@@ -2,11 +2,21 @@
 pragma solidity ^0.8.24;
 
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
+import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 
 /// @title MockBridge
 /// @notice Asynchronous token transfer with programmable delay & failure.
 contract MockBridge {
-    struct TransferReq { address token; address to; uint256 amount; uint256 availableBlock; bool fail; }
+    using SafeERC20 for IERC20;
+
+    struct TransferReq {
+        address token;
+        address to;
+        uint256 amount;
+        uint256 availableBlock;
+        bool fail;
+    }
+
     TransferReq[] public queue;
     mapping(address => bool) public isToken;
     mapping(address => uint256) public delayBlocks; // token => delay
@@ -14,8 +24,13 @@ contract MockBridge {
     event Enqueued(address indexed token, address indexed to, uint256 amount, uint256 availableBlock, bool fail);
     event Delivered(address indexed token, address indexed to, uint256 amount);
 
-    function setToken(address token, bool ok) external { isToken[token] = ok; }
-    function setDelay(address token, uint256 blocksDelay) external { delayBlocks[token] = blocksDelay; }
+    function setToken(address token, bool ok) external {
+        isToken[token] = ok;
+    }
+
+    function setDelay(address token, uint256 blocksDelay) external {
+        delayBlocks[token] = blocksDelay;
+    }
 
     function send(address token, address to, uint256 amount, bool fail) external {
         require(isToken[token], "TOKEN");
@@ -30,11 +45,13 @@ contract MockBridge {
         require(t.availableBlock <= block.number, "NOT_READY");
         // pop front
         if (queue.length > 1) {
-            for (uint256 i = 0; i < queue.length - 1; i++) { queue[i] = queue[i+1]; }
+            for (uint256 i = 0; i < queue.length - 1; i++) {
+                queue[i] = queue[i + 1];
+            }
         }
         queue.pop();
         if (!t.fail) {
-            IERC20(t.token).transfer(t.to, t.amount);
+            IERC20(t.token).safeTransfer(t.to, t.amount);
             emit Delivered(t.token, t.to, t.amount);
         }
     }

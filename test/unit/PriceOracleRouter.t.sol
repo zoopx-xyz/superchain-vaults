@@ -1,15 +1,27 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {PriceOracleRouter} from "contracts/hub/PriceOracleRouter.sol";
 import {MockAggregator} from "contracts/mocks/MockAggregator.sol";
 
 contract MockSequencerOracle {
-    int256 public up = 1; uint256 public updatedAt;
-    constructor(){ updatedAt = block.timestamp; }
-    function setUp(int256 v) external { up = v; updatedAt = block.timestamp; }
-    function setUpdatedAt(uint256 t) external { updatedAt = t; }
+    int256 public up = 1;
+    uint256 public updatedAt;
+
+    constructor() {
+        updatedAt = block.timestamp;
+    }
+
+    function setUp(int256 v) external {
+        up = v;
+        updatedAt = block.timestamp;
+    }
+
+    function setUpdatedAt(uint256 t) external {
+        updatedAt = t;
+    }
+
     function latestRoundData() external view returns (uint80, int256, uint256, uint256, uint80) {
         // Return updatedAt as the latest update timestamp
         return (0, up, 0, updatedAt, 0);
@@ -19,7 +31,8 @@ contract MockSequencerOracle {
 contract PriceOracleRouterTest is Test {
     PriceOracleRouter router;
     address gov = address(0xA11CE);
-    MockAggregator primary; MockAggregator secondary;
+    MockAggregator primary;
+    MockAggregator secondary;
 
     function setUp() public {
         router = new PriceOracleRouter();

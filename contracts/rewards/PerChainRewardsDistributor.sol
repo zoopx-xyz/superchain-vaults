@@ -72,8 +72,13 @@ contract PerChainRewardsDistributor is Initializable, UUPSUpgradeable, AccessCon
         emit Claimed(msg.sender, to, amount);
     }
 
-    function pause() external onlyRole(GOVERNOR_ROLE) { _pause(); }
-    function unpause() external onlyRole(GOVERNOR_ROLE) { _unpause(); }
+    function pause() external onlyRole(GOVERNOR_ROLE) {
+        _pause();
+    }
+
+    function unpause() external onlyRole(GOVERNOR_ROLE) {
+        _unpause();
+    }
 
     uint256[50] private __gap;
 }

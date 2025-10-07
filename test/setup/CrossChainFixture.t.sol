@@ -10,8 +10,6 @@ import {SuperVaultHub} from "../../contracts/hub/SuperVaultHub.sol";
 import {SuperchainAdapter} from "../../contracts/messaging/SuperchainAdapter.sol";
 import {SpokeYieldVault} from "../../contracts/spoke/SpokeYieldVault.sol";
 import {AdapterRegistry} from "../../contracts/strategy/AdapterRegistry.sol";
-import {AaveV3Adapter} from "../../contracts/strategy/AaveV3Adapter.sol";
-import {VelodromeLPAdapter} from "../../contracts/strategy/VelodromeLPAdapter.sol";
 import {SuperchainERC20} from "../../contracts/tokens/SuperchainERC20.sol";
 import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {MockERC20Decimals} from "../../contracts/mocks/MockERC20Decimals.sol";
@@ -57,30 +55,30 @@ contract CrossChainFixture is Test {
         controller.initialize(governor, address(oracle));
         adapter = new SuperchainAdapter();
         adapter.initialize(address(messenger), governor);
-    // Deploy base asset as a proper ERC20 with 6 decimals (USDC-like)
-    MockERC20Decimals base = new MockERC20Decimals("Mock USDC", "mUSDC", 6);
-    asset = IERC20(address(base));
+        // Deploy base asset as a proper ERC20 with 6 decimals (USDC-like)
+        MockERC20Decimals base = new MockERC20Decimals("Mock USDC", "mUSDC", 6);
+        asset = IERC20(address(base));
 
         // Deploy LSTs
-    lstA = new SuperchainERC20("LSTA", "LSTA");
-    lstB = new SuperchainERC20("LSTB", "LSTB");
-    lstC = new SuperchainERC20("LSTC", "LSTC");
+        lstA = new SuperchainERC20("LSTA", "LSTA");
+        lstB = new SuperchainERC20("LSTB", "LSTB");
+        lstC = new SuperchainERC20("LSTC", "LSTC");
 
         // Adapter registry
         AdapterRegistry reg = new AdapterRegistry();
         reg.initialize(governor);
 
-    // Spokes
+        // Spokes
         spokeA = new SpokeYieldVault();
         spokeB = new SpokeYieldVault();
         spokeC = new SpokeYieldVault();
         spokeA.initialize(asset, "VA", "VA", address(hub), governor, governor, address(reg), governor, 0, address(lstA));
         spokeB.initialize(asset, "VB", "VB", address(hub), governor, governor, address(reg), governor, 0, address(lstB));
         spokeC.initialize(asset, "VC", "VC", address(hub), governor, governor, address(reg), governor, 0, address(lstC));
-    // Grant minter to spokes
-    lstA.grantMinter(address(spokeA));
-    lstB.grantMinter(address(spokeB));
-    lstC.grantMinter(address(spokeC));
+        // Grant minter to spokes
+        lstA.grantMinter(address(spokeA));
+        lstB.grantMinter(address(spokeB));
+        lstC.grantMinter(address(spokeC));
         // setup flags
         vm.prank(governor);
         spokeA.setWithdrawalBufferBps(2000);
@@ -99,17 +97,17 @@ contract CrossChainFixture is Test {
         vm.prank(governor);
         hub.registerSpoke(C_CHAIN, address(spokeC));
 
-    // Roles: grant hub role to hub for each spoke, and controller role
-    bytes32 HUB_ROLE_ID = spokeA.HUB_ROLE();
-    bytes32 CONTROLLER_ROLE_ID = spokeA.CONTROLLER_ROLE();
-    vm.startPrank(governor);
-    spokeA.grantRole(HUB_ROLE_ID, address(hub));
-    spokeB.grantRole(HUB_ROLE_ID, address(hub));
-    spokeC.grantRole(HUB_ROLE_ID, address(hub));
-    spokeA.grantRole(CONTROLLER_ROLE_ID, address(controller));
-    spokeB.grantRole(CONTROLLER_ROLE_ID, address(controller));
-    spokeC.grantRole(CONTROLLER_ROLE_ID, address(controller));
-    vm.stopPrank();
+        // Roles: grant hub role to hub for each spoke, and controller role
+        bytes32 hubRoleId = spokeA.HUB_ROLE();
+        bytes32 controllerRoleId = spokeA.CONTROLLER_ROLE();
+        vm.startPrank(governor);
+        spokeA.grantRole(hubRoleId, address(hub));
+        spokeB.grantRole(hubRoleId, address(hub));
+        spokeC.grantRole(hubRoleId, address(hub));
+        spokeA.grantRole(controllerRoleId, address(controller));
+        spokeB.grantRole(controllerRoleId, address(controller));
+        spokeC.grantRole(controllerRoleId, address(controller));
+        vm.stopPrank();
 
         // Seed balances
         deal(address(asset), address(spokeA), 5_000_000e6, true);

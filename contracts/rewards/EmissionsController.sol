@@ -52,7 +52,10 @@ contract EmissionsController is Initializable, UUPSUpgradeable, AccessControlUpg
     }
 
     /// @notice Emits an instruction that an off-chain agent should mint and fund distributor on a chain.
-    function instructDistribute(uint256 chainId, address distributor, uint256 amount, bytes calldata data) external onlyRole(EMISSIONS_ROLE) {
+    function instructDistribute(uint256 chainId, address distributor, uint256 amount, bytes calldata data)
+        external
+        onlyRole(EMISSIONS_ROLE)
+    {
         // Enforce caps
         if (epochCap != 0) {
             require(epochDistributed + amount <= epochCap, "EPOCH_CAP");

@@ -18,7 +18,9 @@ contract MockL2ToL2Messenger {
     bool public allowDuplicates;
     bool public allowOutOfOrder;
 
-    event Enqueued(uint256 indexed srcChainId, address indexed src, uint256 indexed dstChainId, address dst, uint256 availableBlock);
+    event Enqueued(
+        uint256 indexed srcChainId, address indexed src, uint256 indexed dstChainId, address dst, uint256 availableBlock
+    );
     event Delivered(address indexed dst, bytes data);
 
     function setDelay(uint256 srcChainId, uint256 dstChainId, uint256 blocksDelay) external {
@@ -36,11 +38,22 @@ contract MockL2ToL2Messenger {
         // For simplicity, we store 0 for dstChainId here; tests can set delay on (src->0) if desired.
         uint256 dstChainId = 0;
         uint256 avail = block.number + delayBlocks[srcChainId][dstChainId];
-        queue.push(Msg({srcChainId: srcChainId, src: msg.sender, dstChainId: dstChainId, dst: target, data: message, availableBlock: avail}));
+        queue.push(
+            Msg({
+                srcChainId: srcChainId,
+                src: msg.sender,
+                dstChainId: dstChainId,
+                dst: target,
+                data: message,
+                availableBlock: avail
+            })
+        );
         emit Enqueued(srcChainId, msg.sender, dstChainId, target, avail);
     }
 
-    function size() external view returns (uint256) { return queue.length; }
+    function size() external view returns (uint256) {
+        return queue.length;
+    }
 
     function deliverNext() public {
         require(queue.length > 0, "EMPTY");
@@ -48,7 +61,10 @@ contract MockL2ToL2Messenger {
         if (allowOutOfOrder) {
             // find any deliverable message
             for (uint256 i = 0; i < queue.length; i++) {
-                if (queue[i].availableBlock <= block.number) { idx = i; break; }
+                if (queue[i].availableBlock <= block.number) {
+                    idx = i;
+                    break;
+                }
             }
         }
         Msg memory m = queue[idx];

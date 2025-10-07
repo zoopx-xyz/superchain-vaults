@@ -28,10 +28,21 @@ contract SuperchainAdapter is Initializable, UUPSUpgradeable, AccessControlUpgra
     IL2ToL2CrossDomainMessenger public messenger;
 
     // --- Events ---
-    event MessageSent(uint256 indexed srcChainId, address indexed src, uint256 indexed dstChainId, address dst, bytes4 selector, bytes data, uint256 nonce, bytes32 actionId);
+    event MessageSent(
+        uint256 indexed srcChainId,
+        address indexed src,
+        uint256 indexed dstChainId,
+        address dst,
+        bytes4 selector,
+        bytes data,
+        uint256 nonce,
+        bytes32 actionId
+    );
     event SenderAllowed(uint256 indexed chainId, address indexed sender, bool allowed);
     event SelectorAllowed(bytes4 indexed selector, bool allowed);
-    event MessageAccepted(uint256 indexed srcChainId, address indexed src, bytes4 selector, uint256 nonce, bytes32 actionId);
+    event MessageAccepted(
+        uint256 indexed srcChainId, address indexed src, bytes4 selector, uint256 nonce, bytes32 actionId
+    );
     event BridgeFlagUpdated(bool enabled);
 
     // --- Errors ---
@@ -78,7 +89,11 @@ contract SuperchainAdapter is Initializable, UUPSUpgradeable, AccessControlUpgra
     /// @param dstChainId Destination chain id.
     /// @param dst Destination contract address on dst chain.
     /// @param data Calldata to forward to destination.
-    function send(uint256 dstChainId, address dst, bytes calldata data) external onlyRole(GOVERNOR_ROLE) whenNotPaused {
+    function send(uint256 dstChainId, address dst, bytes calldata data)
+        external
+        onlyRole(GOVERNOR_ROLE)
+        whenNotPaused
+    {
         if (!bridgeEnabled) revert BridgeDisabled();
         // Extract selector from bytes calldata payload
         if (data.length < 4) revert NotAllowedSelector();
@@ -93,14 +108,31 @@ contract SuperchainAdapter is Initializable, UUPSUpgradeable, AccessControlUpgra
             // Safe: monotonic increment bounded by uint256
             nonceOf[channel] = nonce + 1;
         }
-    messenger.sendMessage(dst, abi.encodePacked(data, bytes32(nonce)));
-    bytes32 actionId = keccak256(abi.encode("Message", uint256(1), block.chainid, address(this), dstChainId, dst, msg.sender, address(0), uint256(0), nonce));
-    emit MessageSent(block.chainid, address(this), dstChainId, dst, selector, data, nonce, actionId);
+        messenger.sendMessage(dst, abi.encodePacked(data, bytes32(nonce)));
+        bytes32 actionId = keccak256(
+            abi.encode(
+                "Message",
+                uint256(1),
+                block.chainid,
+                address(this),
+                dstChainId,
+                dst,
+                msg.sender,
+                address(0),
+                uint256(0),
+                nonce
+            )
+        );
+        emit MessageSent(block.chainid, address(this), dstChainId, dst, selector, data, nonce, actionId);
     }
 
     /// @notice Accept an incoming message prior to executing state changes on the receiver.
     /// @dev Receivers MUST call this function before mutating state in response to a cross-chain message.
-    function acceptIncoming(uint256 srcChainId, address src, bytes4 selector, uint256 nonce, bytes32 actionId) external onlyRole(RELAYER_ROLE) whenNotPaused {
+    function acceptIncoming(uint256 srcChainId, address src, bytes4 selector, uint256 nonce, bytes32 actionId)
+        external
+        onlyRole(RELAYER_ROLE)
+        whenNotPaused
+    {
         if (!bridgeEnabled) revert BridgeDisabled();
         if (allowedSender[srcChainId] != src) revert NotAllowedSender();
         if (!allowedSelector[selector]) revert NotAllowedSelector();
@@ -115,12 +147,11 @@ contract SuperchainAdapter is Initializable, UUPSUpgradeable, AccessControlUpgra
     /// @param src Source contract on source chain.
     /// @param selector Function selector of the target call.
     /// @return ok True if authorized.
-    function authIncoming(
-        uint256 srcChainId,
-        address src,
-        bytes4 selector,
-        bytes32 msgNonce
-    ) external view returns (bool ok) {
+    function authIncoming(uint256 srcChainId, address src, bytes4 selector, bytes32 msgNonce)
+        external
+        view
+        returns (bool ok)
+    {
         if (allowedSender[srcChainId] != src) revert NotAllowedSender();
         if (!allowedSelector[selector]) revert NotAllowedSelector();
         // Note: view function cannot emit; acceptance should be emitted by the caller using the same actionId derivation.

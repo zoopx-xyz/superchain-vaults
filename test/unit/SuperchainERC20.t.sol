@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import "forge-std/Test.sol";
+import {Test} from "forge-std/Test.sol";
 import {SuperchainERC20} from "contracts/tokens/SuperchainERC20.sol";
 
 contract SuperchainERC20Test is Test {
@@ -11,7 +11,7 @@ contract SuperchainERC20Test is Test {
     address user = address(0xCAFE);
 
     function setUp() public {
-        token = new SuperchainERC20("LST","LST");
+        token = new SuperchainERC20("LST", "LST");
     }
 
     function testGrantRevokeMinterAndMintBurn() public {

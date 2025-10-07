@@ -19,4 +19,15 @@ gas_reports = [
 ]
 coverage = true
 
+# Allow tests to write simulation artifacts under ./artifacts
+fs_permissions = [
+	{ access = "read-write", path = "./artifacts" }
+]
+
 # See more config options https://github.com/foundry-rs/foundry/blob/master/crates/config/README.md#all-options
+
+[profile.scripts]
+# Use via-IR for complex deployment scripts to avoid stack-too-deep
+via_ir = true
+optimizer = true
+optimizer_runs = 10000

@@ -14,7 +14,13 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 /// @title ControllerHub
 /// @notice Lending/borrowing controller hub with RAY fixed-point math and kinked IRM.
-contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeable, PausableUpgradeable, ReentrancyGuardUpgradeable {
+contract ControllerHub is
+    Initializable,
+    UUPSUpgradeable,
+    AccessControlUpgradeable,
+    PausableUpgradeable,
+    ReentrancyGuardUpgradeable
+{
     using SafeCast for uint256;
 
     // Roles
@@ -52,21 +58,86 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
     mapping(address => mapping(address => bool)) public isEntered; // user => lst => entered as collateral
     mapping(address => mapping(address => uint256)) public debtPrincipal; // user => asset => principal amount
     mapping(address => mapping(address => uint256)) public debtIndexSnapshot; // user => asset => debt index at last update
+    // Market enumeration for production multi-market accounting
+    address[] private _markets;
+    mapping(address => bool) public isMarket;
 
     // External dependencies
     IPriceOracleRouter public oracle;
 
     // Events
-    event MarketListed(address indexed asset, uint16 ltvBps, uint16 liqThresholdBps, uint16 reserveFactorBps, uint16 kinkBps, uint64 baseRateRayPerSec, uint64 slope1RayPerSec, uint64 slope2RayPerSec, uint256 borrowCap);
-    event MarketParamsUpdated(address indexed asset, uint16 ltvBps, uint16 liqThresholdBps, uint16 reserveFactorBps, uint16 kinkBps, uint64 baseRateRayPerSec, uint64 slope1RayPerSec, uint64 slope2RayPerSec, uint256 borrowCap);
-    event Accrued(address indexed asset, uint256 supplyIndexRay, uint256 debtIndexRay, uint256 totalBorrows, uint256 totalReserves, uint256 timestamp);
+    event MarketListed(
+        address indexed asset,
+        uint16 ltvBps,
+        uint16 liqThresholdBps,
+        uint16 reserveFactorBps,
+        uint16 kinkBps,
+        uint64 baseRateRayPerSec,
+        uint64 slope1RayPerSec,
+        uint64 slope2RayPerSec,
+        uint256 borrowCap
+    );
+    event MarketParamsUpdated(
+        address indexed asset,
+        uint16 ltvBps,
+        uint16 liqThresholdBps,
+        uint16 reserveFactorBps,
+        uint16 kinkBps,
+        uint64 baseRateRayPerSec,
+        uint64 slope1RayPerSec,
+        uint64 slope2RayPerSec,
+        uint256 borrowCap
+    );
+    event Accrued(
+        address indexed asset,
+        uint256 supplyIndexRay,
+        uint256 debtIndexRay,
+        uint256 totalBorrows,
+        uint256 totalReserves,
+        uint256 timestamp
+    );
     event EnterMarket(address indexed user, address indexed lst);
     event ExitMarket(address indexed user, address indexed lst);
-    event Borrow(address indexed user, address indexed asset, uint256 amount, uint256 debtIndexRay, uint256 hfBps, uint256 dstChainId, bytes32 actionId);
-    event Repay(address indexed user, address indexed asset, uint256 amount, uint256 debtIndexRay, uint256 srcChainId, bytes32 actionId);
-    event Liquidate(address indexed liquidator, address indexed user, address indexed repayAsset, uint256 repayAmount, address seizeLst, uint256 seizeShares, uint256 discountBps, bytes32 actionId);
+    // KPI/events for off-chain observability and tests
+    event BorrowRequested(
+        address indexed user, address indexed asset, uint256 amount, uint256 dstChainId, bytes32 actionId, uint256 ts
+    );
+    event BorrowDecision(
+        address indexed user, address indexed asset, uint256 amount, uint8 routesUsed, bytes32 actionId, uint256 ts
+    );
+    event IRMRateUpdated(address indexed asset, uint256 newBorrowRateRayPerSec, uint256 utilizationRay, uint256 ts);
+    event BorrowPaused(address indexed asset, uint256 ts);
+    event Borrow(
+        address indexed user,
+        address indexed asset,
+        uint256 amount,
+        uint256 debtIndexRay,
+        uint256 hfBps,
+        uint256 dstChainId,
+        bytes32 actionId
+    );
+    event Repay(
+        address indexed user,
+        address indexed asset,
+        uint256 amount,
+        uint256 debtIndexRay,
+        uint256 srcChainId,
+        bytes32 actionId
+    );
+    event Liquidate(
+        address indexed liquidator,
+        address indexed user,
+        address indexed repayAsset,
+        uint256 repayAmount,
+        address seizeLst,
+        uint256 seizeShares,
+        uint256 discountBps,
+        bytes32 actionId
+    );
     event BorrowCapSet(address indexed asset, uint256 cap);
     event PauseSet(bool deposits, bool borrows, bool bridge, bool liquidations);
+    event GovernorProposed(address indexed currentGovernor, address indexed pendingGovernor);
+    event GovernorAccepted(address indexed previousGovernor, address indexed newGovernor);
 
     // Errors
     error MarketNotListed();
@@ -82,18 +153,25 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
         uint256 shares;
     }
     // Policy constants
+
     uint256 public constant CLOSE_FACTOR_BPS = 5000; // 50%
-    uint256 public constant LIQ_BONUS_BPS = 1000;    // 10%
+    uint256 public constant LIQ_BONUS_BPS = 1000; // 10%
 
     // Pause flags
     bool public borrowsPaused;
     bool public liquidationsPaused;
+    address public governor;
+    address public pendingGovernor;
 
     /// @notice Set borrow or liquidation pause flags.
     function setPause(bool _borrows, bool _liquidations) external onlyRole(GOVERNOR_ROLE) {
         borrowsPaused = _borrows;
         liquidationsPaused = _liquidations;
         emit PauseSet(false, _borrows, false, _liquidations);
+        if (_borrows) {
+            // Global pause (asset-less); emit with zero address for compatibility
+            emit BorrowPaused(address(0), block.timestamp);
+        }
     }
 
     // ---------------- internal helpers ----------------
@@ -104,12 +182,32 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
         return price / (10 ** (dec - 18));
     }
 
-    function _actionId(string memory msgType, address user, address asset, uint256 amount, uint256 nonce) internal view returns (bytes32) {
-        return keccak256(abi.encode(msgType, uint256(1), block.chainid, address(this), block.chainid, address(this), user, asset, amount, nonce));
+    function _actionId(string memory msgType, address user, address asset, uint256 amount, uint256 nonce)
+        internal
+        view
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(
+                msgType,
+                uint256(1),
+                block.chainid,
+                address(this),
+                block.chainid,
+                address(this),
+                user,
+                asset,
+                amount,
+                nonce
+            )
+        );
     }
 
     /// @notice Decrease user debt by a repay amount in asset units; rounds in principal space and converts back to assets.
-    function _decreaseDebt(address user, address asset, uint256 idxRay, uint256 repayAmountAsset) internal returns (uint256 actualRepaidAsset) {
+    function _decreaseDebt(address user, address asset, uint256 idxRay, uint256 repayAmountAsset)
+        internal
+        returns (uint256 actualRepaidAsset)
+    {
         MarketState storage s = marketState[asset];
         uint256 rp = (repayAmountAsset * RAY) / idxRay; // repay principal units
         uint256 princ = debtPrincipal[user][asset];
@@ -146,50 +244,100 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
         return curDebtValueWad + addDebtValueWad <= maxDebtWad;
     }
 
-    function initialize(address governor, address oracle_) external initializer {
+    function initialize(address initialGovernor, address oracle_) external initializer {
         __UUPSUpgradeable_init();
         __AccessControl_init();
         __Pausable_init();
         __ReentrancyGuard_init();
-        _grantRole(DEFAULT_ADMIN_ROLE, governor);
-        _grantRole(GOVERNOR_ROLE, governor);
+        _grantRole(DEFAULT_ADMIN_ROLE, initialGovernor);
+        _grantRole(GOVERNOR_ROLE, initialGovernor);
         oracle = IPriceOracleRouter(oracle_);
+        governor = initialGovernor;
     }
 
     function _authorizeUpgrade(address) internal override onlyRole(GOVERNOR_ROLE) {}
+
+    // --- Two-step governor ---
+    function proposeGovernor(address newGov) external onlyRole(GOVERNOR_ROLE) {
+        if (newGov == address(0)) revert InvalidParams();
+        pendingGovernor = newGov;
+        emit GovernorProposed(governor, newGov);
+    }
+
+    function acceptGovernor() external {
+        require(msg.sender == pendingGovernor, "NOT_PENDING");
+        address prev = governor;
+        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
+        _grantRole(GOVERNOR_ROLE, msg.sender);
+        _revokeRole(GOVERNOR_ROLE, prev);
+        _revokeRole(DEFAULT_ADMIN_ROLE, prev);
+        governor = msg.sender;
+        pendingGovernor = address(0);
+        emit GovernorAccepted(prev, msg.sender);
+    }
 
     // Admin: list market
     function listMarket(address asset, bytes calldata params) external onlyRole(GOVERNOR_ROLE) {
         MarketParams memory p = abi.decode(params, (MarketParams));
         // Policy bounds: LTV < LT; kink within [1000, 9500]; close factor/bonus constants already bounded; slope/base rays must be reasonable.
         if (asset == address(0) || p.lst == address(0)) revert InvalidParams();
-    if (p.liqThresholdBps <= p.ltvBps) revert InvalidParams();
-    if (p.kinkBps < 1000 || p.kinkBps > 9500) revert InvalidParams();
-    if (CLOSE_FACTOR_BPS > 5000) revert InvalidParams();
-    if (LIQ_BONUS_BPS > 1000) revert InvalidParams();
+        if (p.liqThresholdBps <= p.ltvBps) revert InvalidParams();
+        if (p.kinkBps < 1000 || p.kinkBps > 9500) revert InvalidParams();
+        if (CLOSE_FACTOR_BPS > 5000) revert InvalidParams();
+        if (LIQ_BONUS_BPS > 1000) revert InvalidParams();
         if (p.kinkBps < 1000 || p.kinkBps > 9500) revert InvalidParams();
         // Reserve factor ≤ 50%
         if (p.reserveFactorBps > 5000) revert InvalidParams();
         // Nonzero indices params
         if (p.slope2Ray < p.slope1Ray) revert InvalidParams();
         marketParams[asset] = p;
-    marketState[asset] = MarketState({supplyIndexRay: RAY, debtIndexRay: RAY, lastAccrual: uint40(block.timestamp), totalBorrows: 0, totalReserves: 0});
-    emit MarketListed(asset, p.ltvBps, p.liqThresholdBps, p.reserveFactorBps, p.kinkBps, uint64(p.baseRateRay), uint64(p.slope1Ray), uint64(p.slope2Ray), p.borrowCap);
+        if (!isMarket[asset]) {
+            isMarket[asset] = true;
+            _markets.push(asset);
+        }
+        marketState[asset] = MarketState({
+            supplyIndexRay: RAY,
+            debtIndexRay: RAY,
+            lastAccrual: uint40(block.timestamp),
+            totalBorrows: 0,
+            totalReserves: 0
+        });
+        emit MarketListed(
+            asset,
+            p.ltvBps,
+            p.liqThresholdBps,
+            p.reserveFactorBps,
+            p.kinkBps,
+            uint64(p.baseRateRay),
+            uint64(p.slope1Ray),
+            uint64(p.slope2Ray),
+            p.borrowCap
+        );
     }
 
     // Admin: update params
     function setParams(address asset, bytes calldata params) external onlyRole(GOVERNOR_ROLE) {
         MarketParams memory p = abi.decode(params, (MarketParams));
         if (p.lst == address(0)) revert InvalidParams();
-    if (p.liqThresholdBps <= p.ltvBps) revert InvalidParams();
-    if (p.kinkBps < 1000 || p.kinkBps > 9500) revert InvalidParams();
-    if (CLOSE_FACTOR_BPS > 5000) revert InvalidParams();
-    if (LIQ_BONUS_BPS > 1000) revert InvalidParams();
+        if (p.liqThresholdBps <= p.ltvBps) revert InvalidParams();
+        if (p.kinkBps < 1000 || p.kinkBps > 9500) revert InvalidParams();
+        if (CLOSE_FACTOR_BPS > 5000) revert InvalidParams();
+        if (LIQ_BONUS_BPS > 1000) revert InvalidParams();
         if (p.kinkBps < 1000 || p.kinkBps > 9500) revert InvalidParams();
         if (p.reserveFactorBps > 5000) revert InvalidParams();
         if (p.slope2Ray < p.slope1Ray) revert InvalidParams();
-    marketParams[asset] = p;
-    emit MarketParamsUpdated(asset, p.ltvBps, p.liqThresholdBps, p.reserveFactorBps, p.kinkBps, uint64(p.baseRateRay), uint64(p.slope1Ray), uint64(p.slope2Ray), p.borrowCap);
+        marketParams[asset] = p;
+        emit MarketParamsUpdated(
+            asset,
+            p.ltvBps,
+            p.liqThresholdBps,
+            p.reserveFactorBps,
+            p.kinkBps,
+            uint64(p.baseRateRay),
+            uint64(p.slope1Ray),
+            uint64(p.slope2Ray),
+            p.borrowCap
+        );
     }
 
     // Collateral: enable LST as collateral
@@ -199,6 +347,9 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
     }
 
     function exitMarket(address lst) external {
+        // Block exit when unhealthy
+        uint256 hf = healthFactor(msg.sender);
+        require(hf >= 1e18, "UNHEALTHY");
         isEntered[msg.sender][lst] = false;
         emit ExitMarket(msg.sender, lst);
     }
@@ -219,7 +370,8 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
         // Borrow rate per second (ray)
         uint256 rateRay;
         if (utilizationRay <= (uint256(p.kinkBps) * RAY) / BPS) {
-            rateRay = uint256(p.baseRateRay) + (uint256(p.slope1Ray) * utilizationRay) / ((uint256(p.kinkBps) * RAY) / BPS);
+            rateRay =
+                uint256(p.baseRateRay) + (uint256(p.slope1Ray) * utilizationRay) / ((uint256(p.kinkBps) * RAY) / BPS);
         } else {
             uint256 over = utilizationRay - ((uint256(p.kinkBps) * RAY) / BPS);
             uint256 denom = RAY - ((uint256(p.kinkBps) * RAY) / BPS);
@@ -236,7 +388,8 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
         s.supplyIndexRay = (s.supplyIndexRay * (RAY + supplyDeltaRay)) / RAY;
 
         s.lastAccrual = uint40(block.timestamp);
-    emit Accrued(asset, s.supplyIndexRay, s.debtIndexRay, s.totalBorrows, s.totalReserves, block.timestamp);
+        emit IRMRateUpdated(asset, rateRay, utilizationRay, block.timestamp);
+        emit Accrued(asset, s.supplyIndexRay, s.debtIndexRay, s.totalBorrows, s.totalReserves, block.timestamp);
     }
 
     // Compute current user debt in asset units
@@ -250,14 +403,42 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
         return (principal * s.debtIndexRay) / snapshot;
     }
 
-    // Compute health factor, scaled to 1e18
+    /// @notice Compute account health factor across all listed markets.
+    /// HF = (Σ_i price(lst_i) * balance(lst_i) * LT_i / 1e4) / (Σ_j price(asset_j) * debt_j)
+    /// Returns 1e18 when no debt.
     function healthFactor(address user) public view returns (uint256 hfWad) {
-        uint256 debtSumWad = 0;
-        uint256 collSumWad = 0;
-        // Iterate over markets by asset address (not enumerable on-chain). Off-chain tooling can estimate; here we check only per entered LST in typical flows via tests.
-        // For practical purposes, HF should be computed per borrow/repay flows rather than externally.
-        // This function computes a lower bound across markets provided the test sets a single market.
-        return collSumWad == 0 && debtSumWad == 0 ? type(uint256).max : (collSumWad * WAD) / (debtSumWad == 0 ? 1 : debtSumWad);
+        (uint256 coll, uint256 debt,) = accountLiquidity(user);
+        if (debt == 0) return 1e18;
+        return Math.mulDiv(coll, 1e18, debt);
+    }
+
+    /// @notice Returns (collateralValueWad, debtValueWad, shortfallWad) across all markets.
+    function accountLiquidity(address user)
+        public
+        view
+        returns (uint256 collateralValueWad, uint256 debtValueWad, uint256 shortfallWad)
+    {
+        uint256 mlen = _markets.length;
+        for (uint256 i = 0; i < mlen; i++) {
+            address asset = _markets[i];
+            MarketParams storage p = marketParams[asset];
+            if (p.lst != address(0) && isEntered[user][p.lst]) {
+                uint256 lstBal = IERC20(p.lst).balanceOf(user);
+                uint256 priceLst1e18 = _price1e18(p.lst);
+                uint256 collWad = Math.mulDiv(lstBal, priceLst1e18, 1e18);
+                collateralValueWad += (collWad * uint256(p.liqThresholdBps)) / BPS;
+            }
+        }
+        for (uint256 i = 0; i < mlen; i++) {
+            address asset = _markets[i];
+            uint256 d = currentDebt(user, asset);
+            if (d != 0) {
+                uint256 priceAsset1e18 = _price1e18(asset);
+                debtValueWad += Math.mulDiv(d, priceAsset1e18, 1e18);
+            }
+        }
+        if (debtValueWad > collateralValueWad) shortfallWad = debtValueWad - collateralValueWad;
+        else shortfallWad = 0;
     }
 
     // Borrow increases user's debt and emits instruction to payout cross-chain
@@ -270,14 +451,25 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
         // Collateral check using LTV and oracle prices
         if (!_isBorrowAllowed(msg.sender, asset, amount)) revert InsufficientCollateral();
 
+        // Emit borrow request intent prior to routing/decision
+        bytes32 reqAid = _actionId("BorrowRequested", msg.sender, asset, amount, block.number);
+        emit BorrowRequested(msg.sender, asset, amount, dstChainId, reqAid, block.timestamp);
+
         // Cap enforcement and state updates
         MarketState storage s = marketState[asset];
         uint256 newTotalBorrows = uint256(s.totalBorrows) + amount;
         if (newTotalBorrows > uint256(p.borrowCap)) revert ExceedsBorrowCap();
         s.totalBorrows = SafeCast.toUint216(newTotalBorrows);
 
+        // Global HF check: ensure user remains healthy (>=1) after proposed borrow
+        // Approximate by checking current HF; exact projection requires simulating added debt in value terms.
+        // We reuse per-asset LTV gate for precise per-market constraint and rely on HF for global risk.
+        require(healthFactor(msg.sender) >= 1e18, "HF_LT_1");
         _increaseDebt(msg.sender, asset, amount);
         _emitBorrow(msg.sender, asset, amount, dstChainId);
+        // Emit a decision with number of routes used (single route in current implementation)
+        bytes32 decAid = _actionId("BorrowDecision", msg.sender, asset, amount, block.number);
+        emit BorrowDecision(msg.sender, asset, amount, 1, decAid, block.timestamp);
         // Cross-chain payout is performed by relayers calling spoke vaults.
     }
 
@@ -292,6 +484,11 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
         uint256 hfBps = debtValueWad == 0 ? type(uint256).max : (collValueWad * BPS) / debtValueWad;
         bytes32 aid = _actionId("Borrow", user, asset, amount, block.number);
         emit Borrow(user, asset, amount, idx, hfBps, dstChainId, aid);
+    }
+
+    /// @notice Returns the list of all listed borrow markets (asset addresses).
+    function allMarkets() external view returns (address[] memory) {
+        return _markets;
     }
 
     // Repay reduces principal
@@ -316,10 +513,15 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
     }
 
     // Liquidation: repay on behalf and seize LST shares
-    function liquidate(address user, address repayAsset, uint256 repayAmount, address seizeLst, address to) external nonReentrant whenNotPaused {
+    function liquidate(address user, address repayAsset, uint256 repayAmount, address seizeLst, address to)
+        external
+        nonReentrant
+        whenNotPaused
+    {
         if (liquidationsPaused) revert NotEnteredMarket();
         accrue(repayAsset);
-        (uint256 ar, uint256 shares, address vaultAddr) = _quoteAndValidateLiquidation(user, repayAsset, repayAmount, seizeLst);
+        (uint256 ar, uint256 shares, address vaultAddr) =
+            _quoteAndValidateLiquidation(user, repayAsset, repayAmount, seizeLst);
         _finalizeLiquidation(user, repayAsset, ar, seizeLst, vaultAddr, shares, to);
     }
 
@@ -350,14 +552,33 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
         vaultAddr = p.vault;
     }
 
-    function _finalizeLiquidation(address user, address repayAsset, uint256 ar, address seizeLst, address vaultAddr, uint256 shares, address to) internal {
+    function _finalizeLiquidation(
+        address user,
+        address repayAsset,
+        uint256 ar,
+        address seizeLst,
+        address vaultAddr,
+        uint256 shares,
+        address to
+    ) internal {
+        // Seize shares first to prevent DoS when no local cash on spoke
         ISpokeYieldVault(vaultAddr).onSeizeShares(user, shares, to);
+        // Attempt to reduce debt immediately; if there is insufficient local cash on spoke to honor bridge payouts,
+        // this hub still accounts for debt reduction by the repaid amount provided by the liquidator off-chain.
+        // For cross-chain settlement, the spoke vault can be instructed to bridge liquidity asynchronously.
         uint256 idxRay = marketState[repayAsset].debtIndexRay;
         uint256 actualRepaid = _decreaseDebt(user, repayAsset, idxRay, ar);
         _emitLiquidate(msg.sender, user, repayAsset, actualRepaid, seizeLst, shares);
     }
 
-    function _emitLiquidate(address liquidator, address user, address repayAsset, uint256 actualRepaid, address seizeLst, uint256 shares) internal {
+    function _emitLiquidate(
+        address liquidator,
+        address user,
+        address repayAsset,
+        uint256 actualRepaid,
+        address seizeLst,
+        uint256 shares
+    ) internal {
         bytes32 aid = _actionId("Liquidate", user, repayAsset, actualRepaid, block.number);
         emit Liquidate(liquidator, user, repayAsset, actualRepaid, seizeLst, shares, LIQ_BONUS_BPS, aid);
     }
@@ -369,7 +590,11 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
     }
 
     /// @notice Returns account liquidity info: collateral value, debt value, and shortfall (if any), all in 1e18 precision.
-    function accountLiquidity(address user, address asset) public view returns (uint256 collateralWad, uint256 debtWad, uint256 shortfallWad) {
+    function accountLiquidity(address user, address asset)
+        public
+        view
+        returns (uint256 collateralWad, uint256 debtWad, uint256 shortfallWad)
+    {
         MarketParams storage p = marketParams[asset];
         uint256 priceLst1e18 = _price1e18(p.lst);
         uint256 priceAsset1e18 = _price1e18(asset);
@@ -381,7 +606,11 @@ contract ControllerHub is Initializable, UUPSUpgradeable, AccessControlUpgradeab
     }
 
     /// @notice Returns market state and derived utilization for an asset.
-    function marketStateExtended(address asset) external view returns (MarketState memory s, MarketParams memory p, uint256 utilizationRay) {
+    function marketStateExtended(address asset)
+        external
+        view
+        returns (MarketState memory s, MarketParams memory p, uint256 utilizationRay)
+    {
         s = marketState[asset];
         p = marketParams[asset];
         uint256 borrows = uint256(s.totalBorrows);

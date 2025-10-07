@@ -9,7 +9,12 @@ import {ReentrancyGuardUpgradeable} from "@openzeppelin/contracts-upgradeable/ut
 
 /// @title BaseAdapter
 /// @notice Base class for protocol adapters.
-abstract contract BaseAdapter is Initializable, PausableUpgradeable, AccessControlUpgradeable, ReentrancyGuardUpgradeable {
+abstract contract BaseAdapter is
+    Initializable,
+    PausableUpgradeable,
+    AccessControlUpgradeable,
+    ReentrancyGuardUpgradeable
+{
     using SafeERC20 for IERC20;
 
     bytes32 public constant GOVERNOR_ROLE = keccak256("GOVERNOR_ROLE");
@@ -29,7 +34,7 @@ abstract contract BaseAdapter is Initializable, PausableUpgradeable, AccessContr
     event AdapterPaused(address indexed adapter, bool paused);
 
     /// @notice Initializer
-    function __BaseAdapter_init(address _vault, address _underlying, address governor) internal onlyInitializing {
+    function baseAdapterInit(address _vault, address _underlying, address governor) internal onlyInitializing {
         __Pausable_init();
         __AccessControl_init();
         __ReentrancyGuard_init();
@@ -67,18 +72,30 @@ abstract contract BaseAdapter is Initializable, PausableUpgradeable, AccessContr
     /// @param assets Amount of assets to deposit.
     /// @param data ABI-encoded adapter-specific parameters.
     /// @return shares Adapter share representation received, if applicable.
-    function deposit(uint256 assets, bytes calldata data) external whenNotPaused onlyVault nonReentrant returns (uint256 shares) {
+    function deposit(uint256 assets, bytes calldata data)
+        external
+        whenNotPaused
+        onlyVault
+        nonReentrant
+        returns (uint256 shares)
+    {
         shares = _deposit(assets, data);
-    emit AdapterDeposit(address(this), underlying, assets);
+        emit AdapterDeposit(address(this), underlying, assets);
     }
 
     /// @notice Withdraws assets from the underlying protocol.
     /// @param assets Amount of assets to withdraw.
     /// @param data ABI-encoded adapter-specific parameters.
     /// @return withdrawn Amount of assets returned to the vault.
-    function withdraw(uint256 assets, bytes calldata data) external whenNotPaused onlyVault nonReentrant returns (uint256 withdrawn) {
+    function withdraw(uint256 assets, bytes calldata data)
+        external
+        whenNotPaused
+        onlyVault
+        nonReentrant
+        returns (uint256 withdrawn)
+    {
         withdrawn = _withdraw(assets, data);
-    emit AdapterWithdraw(address(this), underlying, withdrawn);
+        emit AdapterWithdraw(address(this), underlying, withdrawn);
     }
 
     /// @notice Harvests rewards or realizes PnL for the position.
@@ -86,7 +103,7 @@ abstract contract BaseAdapter is Initializable, PausableUpgradeable, AccessContr
     /// @return harvested Amount of underlying realized.
     function harvest(bytes calldata data) external whenNotPaused onlyVault nonReentrant returns (uint256 harvested) {
         harvested = _harvest(data);
-    emit AdapterHarvest(address(this), underlying, harvested);
+        emit AdapterHarvest(address(this), underlying, harvested);
     }
 
     /// @dev Internal hook to implement protocol deposit.
@@ -104,8 +121,15 @@ abstract contract BaseAdapter is Initializable, PausableUpgradeable, AccessContr
         emit AdapterEmergencyWithdraw(address(this), underlying, amount);
     }
 
-    function pause() external onlyRole(GOVERNOR_ROLE) { _pause(); emit AdapterPaused(address(this), true); }
-    function unpause() external onlyRole(GOVERNOR_ROLE) { _unpause(); emit AdapterPaused(address(this), false); }
+    function pause() external onlyRole(GOVERNOR_ROLE) {
+        _pause();
+        emit AdapterPaused(address(this), true);
+    }
+
+    function unpause() external onlyRole(GOVERNOR_ROLE) {
+        _unpause();
+        emit AdapterPaused(address(this), false);
+    }
 
     uint256[50] private __gap;
 }

@@ -46,9 +46,15 @@ contract AdapterRegistry is Initializable, UUPSUpgradeable, AccessControlUpgrade
         return adapters[adapter].cap;
     }
 
-    function pause() external onlyRole(GOVERNOR_ROLE) { _pause(); emit RegistryPaused(true); }
+    function pause() external onlyRole(GOVERNOR_ROLE) {
+        _pause();
+        emit RegistryPaused(true);
+    }
 
-    function unpause() external onlyRole(GOVERNOR_ROLE) { _unpause(); emit RegistryPaused(false); }
+    function unpause() external onlyRole(GOVERNOR_ROLE) {
+        _unpause();
+        emit RegistryPaused(false);
+    }
 
     uint256[50] private __gap;
 }

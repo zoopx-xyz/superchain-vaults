@@ -1,3 +1,13 @@
+## Governance and emergency procedures
+
+- In production, GOVERNOR_ROLE and DEFAULT_ADMIN_ROLE must be held by a TimelockController-based multisig. EOAs should not hold permanent powers.
+- All privileged contracts (ControllerHub, PriceOracleRouter, SpokeYieldVault, SuperVaultHub, AdapterRegistry) support two-step governor transfer.
+- Emergency pause:
+	- ControllerHub: pause borrows/liquidations via setPause.
+	- SpokeYieldVault: toggle deposits/borrows/bridge via setFlags; withdrawal buffer and epoch caps can be used to rate-limit outflows.
+	- AdapterRegistry: keep paused during onboarding; only unpause after allowlist is finalized.
+- Oracle safety: use per-asset heartbeat, deviation bounds, and min/max answer limits. Configure optional sequencer oracle for L2s.
+
 # Security Overview
 
 This repository implements Superchain vaults and lending infrastructure with a strong focus on defense-in-depth.

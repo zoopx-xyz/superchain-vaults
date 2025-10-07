@@ -13,6 +13,7 @@ contract VaultFactory is Initializable, UUPSUpgradeable, AccessControlUpgradeabl
     using Clones for address;
 
     bytes32 public constant GOVERNOR_ROLE = keccak256("GOVERNOR_ROLE");
+    bytes32 public constant MINTER_ROLE = keccak256("MINTER_ROLE");
 
     address public vaultImpl;
     address public tokenImpl;
@@ -35,7 +36,18 @@ contract VaultFactory is Initializable, UUPSUpgradeable, AccessControlUpgradeabl
         tokenImpl = _tokenImpl;
     }
 
-    struct CreateParams { address asset; string name; string symbol; address hub; address governor; address rebalancer; address adapterRegistry; address feeRecipient; uint16 performanceFeeBps; address lst; }
+    struct CreateParams {
+        address asset;
+        string name;
+        string symbol;
+        address hub;
+        address governor;
+        address rebalancer;
+        address adapterRegistry;
+        address feeRecipient;
+        uint16 performanceFeeBps;
+        address lst;
+    }
 
     /// @notice Creates a new vault and its LST token via minimal proxies.
     function create(CreateParams memory p) external onlyRole(GOVERNOR_ROLE) returns (address vault, address lst) {
@@ -43,13 +55,23 @@ contract VaultFactory is Initializable, UUPSUpgradeable, AccessControlUpgradeabl
         address t = address(new SuperchainERC20(p.name, p.symbol));
         // grant MINTER_ROLE to vault after initialize; interface IDs known
         // Initialize vault via UUPS initializer selector: see vault signature
-        (bool ok,) = v.call(abi.encodeWithSignature(
-            "initialize(address,string,string,address,address,address,address,address,uint16,address)",
-            p.asset, p.name, p.symbol, p.hub, p.governor, p.rebalancer, p.adapterRegistry, p.feeRecipient, p.performanceFeeBps, t
-        ));
+        (bool ok,) = v.call(
+            abi.encodeWithSignature(
+                "initialize(address,string,string,address,address,address,address,address,uint16,address)",
+                p.asset,
+                p.name,
+                p.symbol,
+                p.hub,
+                p.governor,
+                p.rebalancer,
+                p.adapterRegistry,
+                p.feeRecipient,
+                p.performanceFeeBps,
+                t
+            )
+        );
         require(ok, "VAULT_INIT_FAIL");
         // grant MINTER_ROLE
-        bytes32 MINTER_ROLE = keccak256("MINTER_ROLE");
         (ok,) = t.call(abi.encodeWithSignature("grantRole(bytes32,address)", MINTER_ROLE, v));
         require(ok, "GRANT_MINTER_FAIL");
         emit VaultCreated(v, t, p.asset, p.name, p.symbol);

@@ -14,6 +14,8 @@ This project uses Foundry’s coverage instrumentation to produce LCOV output. F
 
 ## Contracts-only coverage (contracts/)
 
+- Overall (average of Lines, Branches, Functions): 87.79%
+
 - Lines: 94.27% (856/908)
 - Branches: 81.44% (136/167)
 - Functions: 87.65% (142/162)

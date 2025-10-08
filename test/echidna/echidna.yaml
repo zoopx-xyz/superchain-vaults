@@ -1,0 +1,11 @@
+testMode: assertion
+corpusDir: ./corpus
+seqLen: 32
+testLimit: 5000
+deployer: '0x30000'
+sender: ['0x30000', '0x30001', '0x30002']
+balance: 1000000000000000000000000
+contracts:
+  Echidna_ControllerHubProps:
+    dir: ../../
+    solcArgs: ["--optimize", "--via-ir"]

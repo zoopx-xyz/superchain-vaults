@@ -65,3 +65,17 @@ PY
 - Foundry disables optimizer and viaIR during coverage to improve instrumentation accuracy;
   if you see stack-too-deep errors, exclude or stub scripts during coverage (already applied here).
 - LCOV report is written to `lcov.info`; the tabular summary appears in the coverage output.
+
+## External fuzzers (optional)
+
+Echidna
+- Harness: `test/echidna/Echidna_ControllerHubProps.sol`
+- Config: `test/echidna/echidna.yaml`
+- Run (example):
+    - echidna —config test/echidna/echidna.yaml test/echidna/Echidna_ControllerHubProps.sol
+
+Medusa
+- Config: `test/medusa/medusa.yaml`
+- Run (example):
+    - medusa run -c test/medusa/medusa.yaml
+

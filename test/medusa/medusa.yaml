@@ -1,0 +1,18 @@
+project:
+  type: foundry
+  root: ../../
+campaigns:
+  - name: controllerhub-basic
+    targets:
+      - contracts/hub/ControllerHub.sol:ControllerHub
+    sequences: 64
+    workers: 1
+    duration: 300  # seconds
+    build:
+      profile: default
+    deploy:
+      
+      # medusa will deploy with default constructor; for proxies/initializers
+      # provide custom scripts or harnesses as needed
+    run:
+      callsPerSequence: 64

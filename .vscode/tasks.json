@@ -90,6 +90,15 @@
 				"$solidityc"
 			],
 			"group": "build"
+		},
+		{
+			"label": "Run coverage (exclude scripts)",
+			"type": "shell",
+			"command": "forge coverage --report lcov --report summary --no-match-path test/unit/DeployScripts.t.sol",
+			"problemMatcher": [
+				"$eslint - stylish"
+			],
+			"group": "build"
 		}
 	]
 }

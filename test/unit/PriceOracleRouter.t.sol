@@ -91,4 +91,23 @@ contract PriceOracleRouterTest is Test {
         seq.setUpdatedAt(block.timestamp);
         router.getPrice(address(0xDD));
     }
+
+    function testZeroAddressGuards() public {
+        // setFeed with zero asset should revert
+        vm.prank(gov);
+        vm.expectRevert(abi.encodeWithSignature("ZeroAddress()"));
+        router.setFeed(address(0), address(primary), address(0), 8, 0, 0);
+        // setFeed with zero primary should revert
+        vm.prank(gov);
+        vm.expectRevert(abi.encodeWithSignature("ZeroAddress()"));
+        router.setFeed(address(0xEE), address(0), address(0), 8, 0, 0);
+        // setFeedBounds before setFeed should revert (f.primary == 0)
+        vm.prank(gov);
+        vm.expectRevert(abi.encodeWithSignature("ZeroAddress()"));
+        router.setFeedBounds(address(0xEE), 0, type(int256).max);
+        // proposeGovernor zero address should revert in proposeGovernor
+        vm.prank(gov);
+        vm.expectRevert(abi.encodeWithSignature("ZeroAddress()"));
+        router.proposeGovernor(address(0));
+    }
 }

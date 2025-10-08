@@ -1,7 +1,5 @@
 [profile.default]
 src = "contracts"
-[profile.default]
-src = "contracts"
 out = "out"
 libs = [
     "lib",
@@ -13,6 +11,10 @@ optimizer = true
 optimizer_runs = 10000
 via_ir = true
 ffi = false
+ignored_paths = [
+    "script",
+    "scripts"
+]
 gas_reports = [
     "SpokeYieldVault",
     "ControllerHub",
@@ -31,6 +33,18 @@ fs_permissions = [
 
 [profile.scripts]
 # Use via-IR for complex deployment scripts to avoid stack-too-deep
+via_ir = true
+optimizer = true
+optimizer_runs = 10000
+
+[profile.coverage]
+# Restrict coverage builds to contracts/ and ignore deployment scripts entirely
+src = "contracts"
+test = "test"
+ignored_paths = ["script", "scripts"]
+ffi = false
+# Redirect script dir to a non-existent path so scripts are not compiled during coverage
+script = "scripts-disabled"
 via_ir = true
 optimizer = true
 optimizer_runs = 10000

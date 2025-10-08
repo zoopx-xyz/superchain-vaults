@@ -6,69 +6,22 @@ import {ControllerHub} from "contracts/hub/ControllerHub.sol";
 import {PriceOracleRouter} from "contracts/hub/PriceOracleRouter.sol";
 import {MockAggregator} from "contracts/mocks/MockAggregator.sol";
 
-contract ERC20Mock {
-    string public name;
-    string public symbol;
+contract TinyERC20 {
     mapping(address => uint256) public balanceOf;
-    mapping(address => mapping(address => uint256)) public allowance;
-
-    event Transfer(address indexed from, address indexed to, uint256 amount);
-    event Approval(address indexed owner, address indexed spender, uint256 amount);
-
-    constructor(string memory n, string memory s) {
-        name = n;
-        symbol = s;
-    }
-
-    function decimals() public pure returns (uint8) {
-        return 18;
-    }
-
-    function transfer(address to, uint256 a) external returns (bool) {
-        balanceOf[msg.sender] -= a;
-        balanceOf[to] += a;
-        emit Transfer(msg.sender, to, a);
-        return true;
-    }
-
-    function approve(address s, uint256 a) external returns (bool) {
-        allowance[msg.sender][s] = a;
-        emit Approval(msg.sender, s, a);
-        return true;
-    }
-
-    function transferFrom(address f, address t, uint256 a) external returns (bool) {
-        uint256 al = allowance[f][msg.sender];
-        require(al >= a, "ALW");
-        if (al != type(uint256).max) allowance[f][msg.sender] = al - a;
-        balanceOf[f] -= a;
-        balanceOf[t] += a;
-        emit Transfer(f, t, a);
-        return true;
-    }
-
-    function mint(address to, uint256 a) external {
-        balanceOf[to] += a;
-        emit Transfer(address(0), to, a);
-    }
+    function decimals() public pure returns (uint8) { return 18; }
+    function mint(address to, uint256 a) external { balanceOf[to] += a; }
 }
 
 contract SeizeSink {
-    event Seized(address user, uint256 shares, address to);
-
     uint256 public lastShares;
-
-    function onSeizeShares(address user, uint256 shares, address to) external {
-        lastShares = shares;
-        emit Seized(user, shares, to);
-    }
+    function onSeizeShares(address, uint256 shares, address) external { lastShares = shares; }
 }
 
 contract ControllerHubBranchesTest is Test {
     ControllerHub hub;
     PriceOracleRouter router;
-    ERC20Mock asset;
-    ERC20Mock lst;
+    TinyERC20 asset;
+    TinyERC20 lst;
     SeizeSink sink;
     MockAggregator aggAsset;
     MockAggregator aggLst;
@@ -80,8 +33,8 @@ contract ControllerHubBranchesTest is Test {
         router.initialize(gov);
         hub = new ControllerHub();
         hub.initialize(gov, address(router));
-        asset = new ERC20Mock("ASSET", "AST");
-        lst = new ERC20Mock("LST", "LST");
+        asset = new TinyERC20();
+        lst = new TinyERC20();
         sink = new SeizeSink();
         aggAsset = new MockAggregator(1e8, block.timestamp);
         aggLst = new MockAggregator(1e8, block.timestamp);
@@ -108,7 +61,7 @@ contract ControllerHubBranchesTest is Test {
         hub.enterMarket(address(lst));
     }
 
-    function testBorrowAtCapBoundaryThenRevertOnPlusOne() public {
+    function testBorrowCapBoundary() public {
         vm.prank(user);
         hub.borrow(address(asset), 100 ether, 0);
         vm.expectRevert(abi.encodeWithSignature("ExceedsBorrowCap()"));
@@ -116,14 +69,77 @@ contract ControllerHubBranchesTest is Test {
         hub.borrow(address(asset), 1, 0);
     }
 
-    function testSeizeRoundingUpNonZero() public {
-        // Borrow up to the cap to make liquidation possible after a price drop
+    function testLiquidationSeizeNonZero() public {
         vm.prank(user);
         hub.borrow(address(asset), 100 ether, 0);
-        // Drop LST price significantly to push account above liquidation threshold
-        aggLst.setAnswer(1e7); // 0.1
-        // Repay a minimal amount to trigger ceilDiv path in share calc and ensure non-zero seize
+        aggLst.setAnswer(1e7);
         hub.liquidate(user, address(asset), 1, address(lst), address(this));
-        assertGt(sink.lastShares(), 0, "seized shares should be > 0 due to ceilDiv rounding up");
+        assertGt(sink.lastShares(), 0);
+    }
+
+    function testRepayWhenNoDebtEarlyReturn() public {
+        // no debt yet
+        hub.repay(address(asset), 1 ether, 0);
+        // should not revert and debt stays zero
+        assertEq(hub.currentDebt(address(this), address(asset)), 0);
+    }
+
+    function testExitMarketUnhealthyReverts() public {
+        // Borrow up to cap, then shock price to become unhealthy
+        vm.prank(user);
+        hub.borrow(address(asset), 100 ether, 0);
+        // extreme drop in LST price to push HF well below 1
+        aggLst.setAnswer(1); // ~1e-8 with 8 decimals
+        vm.prank(user);
+        vm.expectRevert(bytes("UNHEALTHY"));
+        hub.exitMarket(address(lst));
+    }
+
+    function testLiquidateInvalidParamsWrongSeizeLst() public {
+        vm.prank(user);
+        hub.borrow(address(asset), 10 ether, 0);
+        // wrong LST address should revert InvalidParams
+        vm.expectRevert(abi.encodeWithSignature("InvalidParams()"));
+        hub.liquidate(user, address(asset), 1 ether, address(0xB0B), address(this));
+    }
+
+    function testLiquidateNoDebtReverts() public {
+        // user has no debt
+        vm.expectRevert(abi.encodeWithSignature("InsufficientCollateral()"));
+        hub.liquidate(user, address(asset), 1 ether, address(lst), address(this));
+    }
+
+    function testLiquidateNotEnteredMarketReverts() public {
+        // borrow small while entered
+        vm.prank(user);
+        hub.borrow(address(asset), 1 ether, 0);
+        // keep healthy and exit market to flip isEntered=false
+        vm.prank(user);
+        hub.exitMarket(address(lst));
+        // Now liquidation should revert with NotEnteredMarket()
+        vm.expectRevert(abi.encodeWithSignature("NotEnteredMarket()"));
+        hub.liquidate(user, address(asset), 1 ether, address(lst), address(this));
+    }
+
+    function testRepayCapsPrincipalAndTotalBorrows() public {
+        vm.prank(user);
+        hub.borrow(address(asset), 5 ether, 0);
+        // overpay repay amount; should cap at outstanding and zero the debt
+        vm.prank(user);
+        hub.repay(address(asset), 1_000_000 ether, block.chainid);
+        assertEq(hub.currentDebt(user, address(asset)), 0);
+    }
+
+    function testMarketStateExtendedUtilizationBranches() public {
+        // zero borrows => utilization 0
+        (,,uint256 util0) = hub.marketStateExtended(address(asset));
+        assertEq(util0, 0);
+        // with borrows => utilization > 0
+        vm.prank(user);
+        hub.enterMarket(address(lst));
+        vm.prank(user);
+        hub.borrow(address(asset), 1 ether, 0);
+        (,,uint256 util1) = hub.marketStateExtended(address(asset));
+        assertGt(util1, 0);
     }
 }

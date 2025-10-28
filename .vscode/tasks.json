@@ -5,100 +5,54 @@
 			"label": "forge build",
 			"type": "shell",
 			"command": "forge build",
-			"problemMatcher": [
-				"$solidityc"
-			],
-			"group": "build"
-		},
-		{
-			"label": "forge build",
-			"type": "shell",
-			"command": "forge build",
-			"problemMatcher": [
-				"$solidityc"
-			],
-			"group": "build"
-		},
-		{
-			"label": "forge build 2",
-			"type": "shell",
-			"command": "forge build",
-			"problemMatcher": [
-				"$solidityc"
-			],
+			"problemMatcher": ["$gcc"],
 			"group": "build"
 		},
 		{
 			"label": "forge test",
 			"type": "shell",
 			"command": "forge test -q",
-			"problemMatcher": [
-				"$solidityc"
-			],
-			"group": "build"
-		},
-		{
-			"label": "forge test verbose",
-			"type": "shell",
-			"command": "forge test",
-			"problemMatcher": [
-				"$solidityc"
-			],
-			"group": "build"
-		},
-		{
-			"label": "forge test all",
-			"type": "shell",
-			"command": "forge test",
-			"problemMatcher": [
-				"$solidityc"
-			],
-			"group": "build"
-		},
-		{
-			"label": "forge test again",
-			"type": "shell",
-			"command": "forge test",
-			"problemMatcher": [
-				"$solidityc"
-			],
-			"group": "build"
-		},
-		{
-			"label": "forge test full",
-			"type": "shell",
-			"command": "forge test",
-			"problemMatcher": [
-				"$solidityc"
-			],
-			"group": "build"
-		},
-		{
-			"label": "forge test -vv",
-			"type": "shell",
-			"command": "forge test -vv",
-			"problemMatcher": [
-				"$solidityc"
-			],
-			"group": "build"
-		},
-		{
-			"label": "forge test pass",
-			"type": "shell",
-			"command": "forge test",
-			"problemMatcher": [
-				"$solidityc"
-			],
+			"problemMatcher": ["$gcc"],
 			"group": "build"
 		},
 		{
 			"label": "Run coverage (exclude scripts)",
 			"type": "shell",
 			"command": "forge coverage --report lcov --report summary --no-match-path test/unit/DeployScripts.t.sol",
-			"problemMatcher": [
-				"$eslint - stylish"
-			],
+			"problemMatcher": ["$gcc"],
 			"group": "build"
-		}
+	       },
+	       {
+		       "label": "Run Echidna (ControllerHub props)",
+		       "type": "shell",
+		       "command": "echidna test/echidna/Echidna_ControllerHubProps.sol --contract Echidna_ControllerHubProps --config test/echidna/echidna.yaml --test-limit 25000 --seq-len 64",
+		       "options": { "cwd": "${workspaceFolder}" },
+		       "problemMatcher": [],
+		       "group": "build"
+	       },
+	       {
+		       "label": "Run Echidna (Docker, long run)",
+		       "type": "shell",
+		       "command": "sudo docker run --rm --network host -e SOLC_PATH=/usr/local/bin/solc -v \"${workspaceFolder}\":/code -v /dev/null:/code/foundry.toml -w /code trailofbits/echidna bash -lc 'set -euo pipefail; curl -sSfL https://binaries.soliditylang.org/linux-amd64/solc-linux-amd64-v0.8.24+commit.e11b9ed9 -o /usr/local/bin/solc && chmod +x /usr/local/bin/solc && echidna test/echidna/Echidna_ControllerHubProps.sol --contract Echidna_ControllerHubProps --config test/echidna/echidna.yaml --test-limit 25000 --seq-len 64'",
+		       "options": { "cwd": "${workspaceFolder}" },
+		       "problemMatcher": [],
+		       "group": "build"
+	       },
+	       {
+		       "label": "Run Echidna SYV (Docker, long run)",
+		       "type": "shell",
+		       "command": "sudo docker run --rm --network host -e SOLC_PATH=/usr/local/bin/solc -v \"${workspaceFolder}\":/code -v /dev/null:/code/foundry.toml -w /code trailofbits/echidna bash -lc 'set -euo pipefail; curl -sSfL https://binaries.soliditylang.org/linux-amd64/solc-linux-amd64-v0.8.24+commit.e11b9ed9 -o /usr/local/bin/solc && chmod +x /usr/local/bin/solc && echidna test/echidna/Echidna_SpokeYieldVaultProps.sol --contract Echidna_SpokeYieldVaultProps --config test/echidna/echidna.yaml --test-limit 25000 --seq-len 64'",
+		       "options": { "cwd": "${workspaceFolder}" },
+		       "problemMatcher": [],
+		       "group": "build"
+	       },
+	       {
+		       "label": "Run Echidna Oracle (Docker, long run)",
+		       "type": "shell",
+		       "command": "sudo docker run --rm --network host -e SOLC_PATH=/usr/local/bin/solc -v \"${workspaceFolder}\":/code -v /dev/null:/code/foundry.toml -w /code trailofbits/echidna bash -lc 'set -euo pipefail; curl -sSfL https://binaries.soliditylang.org/linux-amd64/solc-linux-amd64-v0.8.24+commit.e11b9ed9 -o /usr/local/bin/solc && chmod +x /usr/local/bin/solc && echidna test/echidna/Echidna_PriceOracleRouterProps.sol --contract Echidna_PriceOracleRouterProps --config test/echidna/echidna.yaml --test-limit 25000 --seq-len 64'",
+		       "options": { "cwd": "${workspaceFolder}" },
+		       "problemMatcher": [],
+		       "group": "build"
+	       }
 	]
 }

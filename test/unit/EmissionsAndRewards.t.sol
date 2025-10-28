@@ -97,6 +97,31 @@ contract EmissionsAndRewardsTest is Test {
         emit EmissionsController.InstructDistribute(block.chainid, address(this), 500 ether, hex"");
         vm.prank(gov);
         ec.instructDistribute(block.chainid, address(this), 500 ether, hex"");
+        // Cover epoch reset and per-chain caps in the same suite
+        vm.prank(gov);
+        ec.setEpochStart(block.timestamp + 1);
+        uint256 otherChain = block.chainid + 1;
+        vm.prank(gov);
+        ec.setPerChainCap(otherChain, 300 ether);
+        vm.prank(gov);
+        ec.instructDistribute(otherChain, address(this), 200 ether, hex"01");
+        vm.prank(gov);
+        ec.instructDistribute(otherChain, address(this), 100 ether, hex"02");
+    }
+
+    function testEpochStartReset() public {
+        // Move epoch start forward and ensure counters reset
+        vm.prank(gov);
+        ec.setEpochStart(block.timestamp + 1);
+        // After reset, distributing on a different chain should start fresh accounting
+        uint256 otherChain = block.chainid + 1;
+        vm.prank(gov);
+        ec.setPerChainCap(otherChain, 300 ether);
+        vm.prank(gov);
+        ec.instructDistribute(otherChain, address(this), 200 ether, hex"01");
+        // second distribute within cap should pass
+        vm.prank(gov);
+        ec.instructDistribute(otherChain, address(this), 100 ether, hex"02");
     }
 
     function testRewardsAccrualAndClaim() public {

@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {VaultFactory} from "contracts/factory/VaultFactory.sol";
+import {ProxyDeployer} from "contracts/proxy/ProxyDeployer.sol";
 
 contract DummyVault {
     event Inited(address asset, string name, string symbol, address hub, address governor, address rebalancer, address adapterRegistry, address feeRecipient, uint16 perfFeeBps, address lst);
@@ -17,7 +18,8 @@ contract VaultFactoryBranchesTest is Test {
 
     function setUp() public {
         factory = new VaultFactory();
-        factory.initialize(gov, address(new DummyVault()), address(0));
+        ProxyDeployer pd = new ProxyDeployer();
+        factory.initialize(gov, address(new DummyVault()), address(0), address(pd));
     }
 
     function testSetImplementationsAndCreate() public {

@@ -12,6 +12,7 @@ import {IERC20} from "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol";
 import {SuperchainERC20} from "../tokens/SuperchainERC20.sol";
 import {AdapterRegistry} from "../strategy/AdapterRegistry.sol";
+import {IStrategyAdapter} from "../interfaces/IStrategyAdapter.sol";
 
 /// @dev Minimal interface to query adapter TVL for cap enforcement.
 interface IAdapterLike {
@@ -50,11 +51,14 @@ contract SpokeYieldVault is
     uint16 public performanceFeeBps; // 0-10000
     address public feeRecipient;
     uint16 public withdrawalBufferBps; // 0-10000 portion of TVL to serve locally
+    uint16 public idleBufferBps; // 0-10000 desired idle buffer target for instant withdrawals
+    uint16 public pullSlippageBps; // max slippage bps allowed when pulling from adapters
 
     // Events
     event AdapterAllocated(address indexed adapter, address indexed asset, uint256 assets);
     event AdapterDeallocated(address indexed adapter, address indexed asset, uint256 assets);
     event Harvest(address indexed adapter, address indexed asset, uint256 yieldAmount);
+    event PerformanceFeeAccrued(address indexed adapter, uint256 feeAssets, uint256 feeShares);
     event LstMinted(address indexed user, uint256 shares, address indexed lst);
     event LstBurned(address indexed user, uint256 shares, address indexed lst);
     event RemoteCreditHandled(
@@ -65,6 +69,8 @@ contract SpokeYieldVault is
     event SharesSeized(address indexed user, address indexed to, uint256 shares, bytes32 actionId);
     event FlagsUpdated(bool depositsEnabled, bool borrowsEnabled, bool bridgeEnabled);
     event StateChanged(uint8 previous, uint8 current);
+    event IdleBufferUpdated(uint16 bps);
+    event PullSlippageUpdated(uint16 bps);
     // Withdraw queue events (for harness/integration testing)
     event WithdrawQueued(address indexed user, uint256 indexed claimId, uint256 shares, uint256 ts);
     event WithdrawFulfilled(
@@ -82,6 +88,8 @@ contract SpokeYieldVault is
     error DuplicateClaim();
     error InvalidArray();
     error BadState();
+    error InsufficientLiquidity();
+    error NotGovernor();
 
     // Nonce replay protection for inbound messages
     mapping(bytes32 => bool) private _usedNonce;
@@ -159,9 +167,14 @@ contract SpokeYieldVault is
         state = VaultState.Idle;
         stateSince = uint64(block.timestamp);
         governor = initialGovernor;
+        // Default buffers
+        idleBufferBps = 100; // 1%
+        pullSlippageBps = 50; // 0.5%
     }
 
-    function _authorizeUpgrade(address) internal override onlyRole(GOVERNOR_ROLE) {}
+    function _authorizeUpgrade(address) internal override {
+        if (!hasRole(GOVERNOR_ROLE, msg.sender)) revert NotGovernor();
+    }
 
     // --- Flags ---
     function setFlags(bool _deposits, bool _borrows, bool _bridge) external onlyRole(GOVERNOR_ROLE) {
@@ -207,6 +220,31 @@ contract SpokeYieldVault is
         withdrawalBufferBps = bps;
     }
 
+    /// @notice Configure desired idle buffer (portion of TVL to keep as idle for instant withdrawals).
+    function setIdleBufferBps(uint16 bps) external onlyRole(GOVERNOR_ROLE) {
+        require(bps <= 1000, "BPS");
+        idleBufferBps = bps;
+        emit IdleBufferUpdated(bps);
+    }
+
+    /// @notice Configure max slippage bps used when pulling liquidity from adapters.
+    function setPullSlippageBps(uint16 bps) external onlyRole(GOVERNOR_ROLE) {
+        require(bps <= 1000, "BPS");
+        pullSlippageBps = bps;
+        emit PullSlippageUpdated(bps);
+    }
+
+    /// @notice Update fee recipient.
+    function setFeeRecipient(address recipient) external onlyRole(GOVERNOR_ROLE) {
+        feeRecipient = recipient;
+    }
+
+    /// @notice Update performance fee bps.
+    function setPerformanceFeeBps(uint16 bps) external onlyRole(GOVERNOR_ROLE) {
+        require(bps <= 10_000, "BPS");
+        performanceFeeBps = bps;
+    }
+
     /// @notice Configure the per-epoch outflow cap and epoch length.
     function setEpochOutflowConfig(uint16 capBps, uint64 lengthSec) external onlyRole(GOVERNOR_ROLE) {
         require(capBps <= 10_000, "BPS");
@@ -224,17 +262,51 @@ contract SpokeYieldVault is
 
     // --- ERC4626 virtual conversions ---
     function _convertToShares(uint256 assets, Math.Rounding rounding) internal view override returns (uint256) {
-        uint256 tAssets = super.totalAssets() + VIRTUAL_ASSETS;
+        uint256 tAssets = totalAssets() + VIRTUAL_ASSETS;
         uint256 tSupply = totalSupply() + VIRTUAL_SHARES;
         if (assets == 0) return 0;
         return Math.mulDiv(assets, tSupply, tAssets, rounding);
     }
 
     function _convertToAssets(uint256 shares, Math.Rounding rounding) internal view override returns (uint256) {
-        uint256 tAssets = super.totalAssets() + VIRTUAL_ASSETS;
+        uint256 tAssets = totalAssets() + VIRTUAL_ASSETS;
         uint256 tSupply = totalSupply() + VIRTUAL_SHARES;
         if (shares == 0) return 0;
         return Math.mulDiv(shares, tAssets, tSupply, rounding);
+    }
+
+    /// @notice Aggregate vault TVL = idle balance + Σ adapter TVL.
+    function totalAssets() public view override returns (uint256) {
+        uint256 idle = IERC20(asset()).balanceOf(address(this));
+        uint256 sum = idle;
+        // Enumerate adapters from registry (feature-detected)
+        address[] memory list;
+        {
+            (bool ok, bytes memory ret) = address(adapterRegistry).staticcall(
+                abi.encodeWithSignature("adapters()")
+            );
+            if (ok && ret.length != 0) {
+                list = abi.decode(ret, (address[]));
+            } else {
+                list = new address[](0);
+            }
+        }
+        uint256 len = list.length;
+        for (uint256 i = 0; i < len; i++) {
+            address ad = list[i];
+            // Only count allowed adapters
+            (bool ok,) = address(adapterRegistry).staticcall(abi.encodeWithSignature("isAllowed(address)", ad));
+            if (!ok) continue;
+            // Use IStrategyAdapter to read TVL
+            uint256 tvl;
+            try IStrategyAdapter(ad).totalAssets() returns (uint256 v) {
+                tvl = v;
+            } catch {
+                tvl = 0;
+            }
+            sum += tvl;
+        }
+        return sum;
     }
 
     // --- ERC4626 overrides ---
@@ -262,11 +334,56 @@ contract SpokeYieldVault is
         nonReentrant
         returns (uint256 assets)
     {
-        // Burn LST first, then shares
+        // Attempt to ensure sufficient idle by pulling from adapters
+        uint256 reqAssets = previewRedeem(shares);
+        uint256 idle = IERC20(asset()).balanceOf(address(this));
+        if (idle < reqAssets) {
+            uint256 need = reqAssets - idle;
+            if (need != 0) {
+                _pullFromAdapters(need, pullSlippageBps);
+            }
+            idle = IERC20(asset()).balanceOf(address(this));
+        }
+        if (idle < reqAssets) {
+            // Fallback to queue: do not burn; enqueue claim by shares and return 0
+            this.enqueueWithdraw(shares);
+            return 0;
+        }
+        // Burn LST and redeem shares
         lst.burn(owner, shares);
         emit LstBurned(owner, shares, address(lst));
         _preMintSync();
         assets = super.redeem(shares, receiver, owner);
+    }
+
+    /// @inheritdoc ERC4626Upgradeable
+    function withdraw(uint256 assets, address receiver, address owner)
+        public
+        override
+        whenNotPaused
+        nonReentrant
+        returns (uint256 shares)
+    {
+        // Ensure idle liquidity by pulling from adapters if needed
+        uint256 idle = IERC20(asset()).balanceOf(address(this));
+        if (idle < assets) {
+            uint256 need = assets - idle;
+            if (need != 0) {
+                _pullFromAdapters(need, pullSlippageBps);
+            }
+            idle = IERC20(asset()).balanceOf(address(this));
+        }
+        if (idle < assets) {
+            // Fallback to queue by enqueueing corresponding shares for owner; return 0
+            uint256 sh = previewWithdraw(assets);
+            this.enqueueWithdraw(sh);
+            return 0;
+        }
+        // Mirror LST burn amount
+        uint256 shBurn = previewWithdraw(assets);
+        lst.burn(owner, shBurn);
+        emit LstBurned(owner, shBurn, address(lst));
+        shares = super.withdraw(assets, receiver, owner);
     }
 
     // --- Strategy operations ---
@@ -323,9 +440,26 @@ contract SpokeYieldVault is
         state = VaultState.Harvesting;
         stateSince = uint64(block.timestamp);
         emit StateChanged(uint8(VaultState.Idle), uint8(state));
-        (bool ok,) = adapter.call(abi.encodeWithSignature("harvest(bytes)", data));
+        // Low-level call so we can provide a deterministic revert message if adapter is missing harvest()
+        (bool ok, bytes memory ret) = adapter.call(abi.encodeWithSignature("harvest(bytes)", data));
         require(ok, "ADAPTER_HARVEST_FAIL");
-        emit Harvest(adapter, asset(), 0);
+        uint256 harvested = 0;
+        if (ret.length != 0) {
+            harvested = abi.decode(ret, (uint256));
+        }
+        // Performance fee on positive PnL
+        if (harvested > 0 && performanceFeeBps != 0 && feeRecipient != address(0)) {
+            uint256 feeAssets = (harvested * uint256(performanceFeeBps)) / 10_000;
+            if (feeAssets > 0) {
+                uint256 feeShares = convertToShares(feeAssets);
+                if (feeShares > 0) {
+                    _mint(feeRecipient, feeShares);
+                    lst.mint(feeRecipient, feeShares);
+                    emit PerformanceFeeAccrued(adapter, feeAssets, feeShares);
+                }
+            }
+        }
+        emit Harvest(adapter, asset(), harvested);
         state = VaultState.Idle;
         stateSince = uint64(block.timestamp);
         emit StateChanged(uint8(VaultState.Harvesting), uint8(state));
@@ -540,4 +674,58 @@ contract SpokeYieldVault is
     }
 
     uint256[50] private __gap;
+
+    /// @dev Pull liquidity from adapters by ascending withdrawPriority until assetsNeeded satisfied or exhausted.
+    function _pullFromAdapters(uint256 assetsNeeded, uint16 maxSlippageBps) internal returns (uint256 pulled) {
+        // Load adapters list via feature-detected call
+        address[] memory list;
+        {
+            (bool ok, bytes memory ret) = address(adapterRegistry).staticcall(
+                abi.encodeWithSignature("adapters()")
+            );
+            if (ok && ret.length != 0) {
+                list = abi.decode(ret, (address[]));
+            } else {
+                list = new address[](0);
+            }
+        }
+        uint256 len = list.length;
+        // Sort in-memory by withdrawPriority (ascending) using simple insertion sort
+        for (uint256 i = 1; i < len; i++) {
+            address key = list[i];
+            uint256 keyP = adapterRegistry.withdrawPriority(key);
+            uint256 j = i;
+            while (j > 0) {
+                address prev = list[j - 1];
+                if (adapterRegistry.withdrawPriority(prev) <= keyP) break;
+                list[j] = prev;
+                j--;
+            }
+            list[j] = key;
+        }
+        for (uint256 i = 0; i < len && pulled < assetsNeeded; i++) {
+            address ad = list[i];
+            // Only consider allowed adapters
+            (bool ok, bytes memory ret) = address(adapterRegistry).staticcall(abi.encodeWithSignature("isAllowed(address)", ad));
+            if (!ok || ret.length == 0) continue;
+            bool allowed;
+            assembly { allowed := mload(add(ret, 32)) }
+            if (!allowed) continue;
+            uint256 tvl;
+            try IStrategyAdapter(ad).totalAssets() returns (uint256 v) { tvl = v; } catch { tvl = 0; }
+            if (tvl == 0) continue;
+            uint256 remaining = assetsNeeded - pulled;
+            uint256 toPull = remaining > tvl ? tvl : remaining;
+            uint256 minOut = (toPull * (10_000 - maxSlippageBps)) / 10_000;
+            uint256 got;
+            try IStrategyAdapter(ad).withdraw(toPull, abi.encode(minOut)) returns (uint256 w) {
+                got = w;
+            } catch {
+                revert("ADAPTER_WITHDRAW_FAIL");
+            }
+            // Guard slippage at adapter level
+            require(got >= minOut, "SLIPPAGE");
+            pulled += got;
+        }
+    }
 }

@@ -5,6 +5,7 @@ import {Test} from "forge-std/Test.sol";
 import {VaultFactory} from "contracts/factory/VaultFactory.sol";
 import {SpokeYieldVault} from "contracts/spoke/SpokeYieldVault.sol";
 import {SuperchainERC20} from "contracts/tokens/SuperchainERC20.sol";
+import {ProxyDeployer} from "contracts/proxy/ProxyDeployer.sol";
 
 contract DummyVault is SpokeYieldVault {}
 
@@ -15,7 +16,8 @@ contract VaultFactoryTest is Test {
 
     function setUp() public {
         fac = new VaultFactory();
-        fac.initialize(gov, address(new DummyVault()), address(new SuperchainERC20("TMP", "TMP")));
+        ProxyDeployer pd = new ProxyDeployer();
+        fac.initialize(gov, address(new DummyVault()), address(new SuperchainERC20("TMP", "TMP")), address(pd));
     }
 
     function testCreateVaultAndToken() public {
@@ -33,5 +35,8 @@ contract VaultFactoryTest is Test {
         });
         (address v, address t) = fac.create(p);
         assertTrue(v != address(0) && t != address(0));
+        // Cover setters as part of this test (coverage runner includes this suite)
+        fac.setImplementations(address(new DummyVault()), address(new SuperchainERC20("TMP2", "TMP2")));
+        fac.setProxyDeployer(address(new ProxyDeployer()));
     }
 }

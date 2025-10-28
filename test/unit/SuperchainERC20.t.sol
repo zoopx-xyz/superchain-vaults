@@ -26,5 +26,7 @@ contract SuperchainERC20Test is Test {
         vm.expectRevert();
         vm.prank(vault);
         token.mint(user, 1);
+        // Also cover decimals()
+        assertEq(token.decimals(), 18);
     }
 }

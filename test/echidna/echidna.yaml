@@ -5,7 +5,14 @@ testLimit: 5000
 deployer: '0x30000'
 sender: ['0x30000', '0x30001', '0x30002']
 balance: 1000000000000000000000000
-contracts:
-  Echidna_ControllerHubProps:
-    dir: ../../
-    solcArgs: ["--optimize", "--via-ir"]
+# Default harness; override with --contract in CLI/tasks for others
+contract: Echidna_ControllerHubProps
+cryticArgs:
+  - "--compile-force-framework"
+  - "solc"
+  - "--solc"
+  - "/usr/local/bin/solc"
+  - "--solc-remaps"
+  - "@openzeppelin/contracts=lib/openzeppelin-contracts/contracts @openzeppelin/contracts-upgradeable=lib/openzeppelin-contracts-upgradeable/contracts"
+  - "--solc-args"
+  - "--optimize --via-ir --base-path . --include-path lib --allow-paths .,/code,/code/lib,lib"
